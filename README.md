@@ -19,9 +19,9 @@ D3.js force-directed graph visualization for Friday's memory system.
 
 1. Start the memory API server:
 ```bash
-cd ~/.claude/memory-api
+cd ~/proyectos/memory-graph
 source venv/bin/activate
-python api_server.py
+FRIDAY_DB_PATH=~/.claude/memory.db python3 api_server.py
 ```
 
 2. Access the graph at `http://localhost:7777/graph`
@@ -32,7 +32,7 @@ python api_server.py
 |---|---|
 | `GET /health` | Health check |
 | `GET /graph` | Serve Memory Graph UI |
-| `GET /conversation/logs` | Get conversation logs |
+| `GET /conversation/recent` | Get recent conversation logs |
 | `GET /memory/list` | List all memories |
 | `GET /entity/search?q=` | Search entities |
 | `GET /search/semantic?q=` | Semantic search (RAG) |
