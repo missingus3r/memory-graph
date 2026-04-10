@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Friday Memory Graph</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230a0a0f'/%3E%3Ccircle cx='20' cy='38' r='6' fill='%23ff6b6b' opacity='.8'/%3E%3Ccircle cx='44' cy='26' r='6' fill='%2360a5fa' opacity='.8'/%3E%3Ccircle cx='32' cy='44' r='5' fill='%2334d399' opacity='.8'/%3E%3Ccircle cx='38' cy='18' r='4' fill='%23fbbf24' opacity='.8'/%3E%3Cline x1='20' y1='38' x2='44' y2='26' stroke='%23334155' stroke-width='1.5'/%3E%3Cline x1='20' y1='38' x2='32' y2='44' stroke='%23334155' stroke-width='1.5'/%3E%3Cline x1='44' y1='26' x2='38' y2='18' stroke='%23fbbf24' stroke-width='1.5' stroke-dasharray='3'/%3E%3C/svg%3E">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;overflow:hidden;height:100vh;width:100vw}
+#graph{width:100%;height:100%}
+.tab-view{display:none;width:100%;height:100%}
+.tab-view.active{display:block}
+
+/* Tab buttons */
+.tab-btns{display:flex;gap:0}
+.tab-btn{padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,0.1);background:transparent;color:#64748b;transition:all 0.2s;border-radius:0}
+.tab-btn:first-child{border-radius:8px 0 0 8px}
+.tab-btn:last-child{border-radius:0 8px 8px 0}
+.tab-btn.active{background:rgba(255,107,107,0.15);border-color:#ff6b6b;color:#ff6b6b}
+
+/* Logs panel */
+#logsPanel{position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;padding:12px 16px;display:none}
+#logsPanel.active{display:block}
+.log-entry{padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;transition:background 0.15s}
+.log-entry:hover{background:rgba(255,255,255,0.02)}
+.log-meta{display:flex;gap:8px;align-items:center;margin-bottom:4px;flex-wrap:wrap}
+.log-time{color:#475569;font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.log-role{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:2px 8px;border-radius:4px;display:inline-block}
+.log-role.user{color:#60a5fa;background:rgba(96,165,250,0.1)}
+.log-role.assistant{color:#34d399;background:rgba(52,211,153,0.1)}
+.log-role.system{color:#fbbf24;background:rgba(251,191,36,0.1)}
+.log-channel{color:#f472b6;font-size:10px}
+.log-content{color:#94a3b8;line-height:1.6;word-break:break-word;font-size:13px}
+.log-search-info{padding:8px 12px;font-size:11px;color:#475569;border-bottom:1px solid rgba(255,255,255,0.06);margin-bottom:4px}
+.log-date-header{padding:10px 12px;font-size:12px;font-weight:700;color:#ff6b6b;background:rgba(255,107,107,0.05);border-bottom:1px solid rgba(255,255,255,0.06);position:sticky;top:0;z-index:10;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none}
+.log-date-header:hover{background:rgba(255,107,107,0.1)}
+.log-date-header .arrow{transition:transform 0.2s;font-size:10px}
+.log-date-header.collapsed .arrow{transform:rotate(-90deg)}
+
+/* RAG */
+.rag-result{padding:14px 16px;border:1px solid rgba(255,255,255,0.06);border-radius:10px;margin-bottom:10px;background:rgba(255,255,255,0.02);transition:border-color 0.2s}
+.rag-result:hover{border-color:rgba(255,107,107,0.2)}
+.rag-meta{display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+.rag-score{font-size:12px;font-weight:700;padding:2px 8px;border-radius:6px;font-variant-numeric:tabular-nums}
+.rag-score.high{color:#34d399;background:rgba(52,211,153,0.1)}
+.rag-score.mid{color:#fbbf24;background:rgba(251,191,36,0.1)}
+.rag-score.low{color:#64748b;background:rgba(100,116,139,0.1)}
+.rag-type{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;padding:2px 8px;border-radius:4px}
+.rag-type.conversation{color:#60a5fa;background:rgba(96,165,250,0.1)}
+.rag-type.memory{color:#c084fc;background:rgba(192,132,252,0.1)}
+.rag-content{color:#94a3b8;font-size:13px;line-height:1.6}
+.rag-time{color:#475569;font-size:11px}
+#ragQuery:focus{border-color:#ff6b6b}
+.rag-card{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:16px;text-align:center}
+.rag-card-value{font-size:28px;font-weight:800;color:#e2e8f0;letter-spacing:-0.03em}
+.rag-card-value .rag-card-sub{font-size:14px;font-weight:400;color:#475569}
+.rag-card-label{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px}
+.log-date-group.collapsed .log-entry{display:none}
+
+/* Top bar */
+.topbar{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(10,10,15,0.9);backdrop-filter:blur(12px);border-bottom:1px solid rgba(255,255,255,0.06);padding:10px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.topbar h1{font-size:14px;font-weight:700;color:#ff6b6b;letter-spacing:0.5px;white-space:nowrap}
+.topbar .stats{font-size:11px;color:#64748b;display:flex;gap:12px}
+.topbar .stats span{white-space:nowrap}
+.topbar .stats b{color:#e2e8f0}
+.topbar .live{width:8px;height:8px;border-radius:50%;background:#34d399;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+
+/* Filters */
+.filters{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
+.filter-btn{padding:4px 10px;border-radius:12px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,0.1);background:transparent;color:#64748b;transition:all 0.2s}
+.filter-btn.active{border-color:var(--c);color:var(--c);background:rgba(255,255,255,0.05)}
+.filter-btn:hover{border-color:#555;color:#ccc}
+
+/* Node tooltip */
+.tooltip{position:fixed;z-index:200;background:rgba(15,15,25,0.95);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:12px 16px;max-width:350px;font-size:12px;line-height:1.6;pointer-events:none;display:none;box-shadow:0 12px 40px rgba(0,0,0,0.5)}
+.tooltip .t-type{font-size:9px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;font-weight:700}
+.tooltip .t-content{color:#94a3b8;font-size:11px;max-height:120px;overflow:hidden;text-overflow:ellipsis}
+.tooltip .t-time{color:#475569;font-size:10px;margin-top:6px}
+
+/* Search */
+.search{padding:5px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.03);color:#e2e8f0;font-size:11px;width:160px;outline:none}
+.search:focus{border-color:#ff6b6b}
+.search::placeholder{color:#475569}
+
+/* Legend */
+.legend{position:fixed;bottom:12px;left:12px;z-index:100;display:flex;gap:8px;flex-wrap:wrap}
+.legend-item{display:flex;align-items:center;gap:4px;font-size:10px;color:#64748b}
+.legend-dot{width:10px;height:10px;border-radius:50%}
+
+/* Arch panel */
+#archPanel{position:fixed;top:50px;left:0;right:0;bottom:0;overflow:hidden;display:none}
+#archPanel.active{display:block}
+.arch-svg{width:100%;height:100%;background:#0a0a0f}
+.arch-node{cursor:pointer;transition:filter 0.2s}
+.arch-node:hover{filter:drop-shadow(0 0 12px currentColor)}
+.arch-link{fill:none;stroke-width:1.5}
+.arch-link-data{stroke:#334155;stroke-dasharray:none}
+.arch-link-control{stroke:#fbbf24;stroke-dasharray:8,4}
+.arch-link-monitoring{stroke:#94a3b8;stroke-dasharray:2,3}
+.arch-label{fill:#e2e8f0;font-size:11px;font-weight:600;text-anchor:middle;pointer-events:none;text-shadow:0 0 6px rgba(0,0,0,0.9)}
+.arch-link-label{fill:#475569;font-size:9px;text-anchor:middle;pointer-events:none}
+.arch-status{pointer-events:none}
+.arch-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:300;background:rgba(15,15,25,0.97);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:28px 32px;min-width:320px;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,0.7);display:none}
+.arch-modal h2{font-size:18px;font-weight:700;margin-bottom:12px}
+.arch-modal .modal-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13px;color:#94a3b8}
+.arch-modal .modal-row b{color:#e2e8f0}
+.arch-modal .status-badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600}
+.arch-modal .status-dot{width:8px;height:8px;border-radius:50%}
+.arch-modal .modal-details{color:#94a3b8;font-size:13px;line-height:1.7;margin-top:12px;border-top:1px solid rgba(255,255,255,0.06);padding-top:12px}
+.arch-modal-close{position:absolute;top:12px;right:16px;background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;padding:4px 8px;border-radius:6px}
+.arch-modal-close:hover{color:#e2e8f0;background:rgba(255,255,255,0.05)}
+.arch-modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;z-index:299;background:rgba(0,0,0,0.5);display:none}
+
+/* Mobile */
+@media(max-width:640px){
+  .topbar{padding:8px 10px;gap:8px}
+  .topbar h1{font-size:12px}
+  .search{width:120px}
+  .filters{gap:4px}
+  .filter-btn{font-size:9px;padding:3px 8px}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="live"></div>
+  <h1>FRIDAY MEMORY</h1>
+  <div class="tab-btns">
+    <button class="tab-btn active" data-tab="graph">Graph</button>
+    <button class="tab-btn" data-tab="logs">Logs</button>
+    <button class="tab-btn" data-tab="arch">Arch</button>
+    <button class="tab-btn" data-tab="rag">RAG</button>
+  </div>
+  <div class="stats">
+    <span>Nodos: <b id="nodeCount">0</b></span>
+    <span>Links: <b id="linkCount">0</b></span>
+    <span>Último: <b id="lastUpdate">--</b></span>
+  </div>
+  <input type="text" class="search" id="search" placeholder="Buscar...">
+  <div class="filters">
+    <button class="filter-btn active" data-filter="all" style="--c:#e2e8f0">Todos</button>
+    <button class="filter-btn active" data-filter="user" style="--c:#60a5fa">User</button>
+    <button class="filter-btn active" data-filter="assistant" style="--c:#34d399">Assistant</button>
+    <button class="filter-btn active" data-filter="system" style="--c:#fbbf24">System</button>
+    <button class="filter-btn active" data-filter="memory" style="--c:#c084fc">Memory</button>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip">
+  <div class="t-type" id="ttType"></div>
+  <div class="t-content" id="ttContent"></div>
+  <div class="t-time" id="ttTime"></div>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#60a5fa"></div>User</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#34d399"></div>Assistant</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#fbbf24"></div>System</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#c084fc"></div>Memory</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f472b6"></div>Channel</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ff6b6b"></div>Topic</div>
+</div>
+
+<svg id="graph" class="tab-view active"></svg>
+<div id="logsPanel" class="tab-view"></div>
+<div id="archPanel" class="tab-view"></div>
+<div id="ragPanel" class="tab-view" style="position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;padding:16px">
+  <div style="max-width:900px;margin:0 auto">
+    <!-- Dashboard cards -->
+    <div id="ragDashboard" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px"></div>
+    <!-- Reindex button -->
+    <div style="margin-bottom:20px;display:flex;gap:8px;align-items:center">
+      <button onclick="doReindex()" id="reindexBtn" style="padding:8px 16px;border-radius:8px;border:1px solid rgba(255,107,107,0.3);background:rgba(255,107,107,0.08);color:#ff6b6b;font-size:12px;font-weight:600;cursor:pointer">Reindexar Todo</button>
+      <span id="reindexStatus" style="font-size:11px;color:#475569"></span>
+    </div>
+    <!-- Search -->
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      <input type="text" id="ragQuery" placeholder="Buscar por significado..." style="flex:1;padding:10px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.03);color:#e2e8f0;font-size:14px;outline:none;font-family:inherit" onkeydown="if(event.key==='Enter')doRagSearch()">
+      <select id="ragMode" style="padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.03);color:#e2e8f0;font-size:12px;outline:none">
+        <option value="hybrid">Hybrid</option>
+        <option value="semantic">Semantic</option>
+      </select>
+      <button onclick="doRagSearch()" style="padding:10px 20px;border-radius:10px;border:none;background:#ff6b6b;color:#fff;font-weight:600;font-size:13px;cursor:pointer">Buscar</button>
+    </div>
+    <div id="ragResults"></div>
+  </div>
+</div>
+<div class="arch-modal-overlay" id="archOverlay" onclick="closeArchModal()"></div>
+<div class="arch-modal" id="archModal">
+  <button class="arch-modal-close" onclick="closeArchModal()">&times;</button>
+  <div id="archModalContent"></div>
+</div>
+
+<script>
+const API = window.location.origin;
+const COLORS = {
+  user: '#60a5fa',
+  assistant: '#34d399',
+  system: '#fbbf24',
+  memory: '#c084fc',
+  channel: '#f472b6',
+  topic: '#ff6b6b',
+  feedback: '#fb923c',
+  project: '#2dd4bf',
+  reference: '#a78bfa',
+};
+
+let allNodes = [];
+let allLinks = [];
+let activeFilters = new Set(['user','assistant','system','memory']);
+let simulation, svg, g, link, node, labels;
+let lastConvId = 0;
+
+const width = window.innerWidth;
+const height = window.innerHeight;
+
+// Setup SVG
+svg = d3.select('#graph').attr('width', width).attr('height', height);
+g = svg.append('g');
+
+// Zoom
+const zoom = d3.zoom().scaleExtent([0.1, 8]).on('zoom', e => g.attr('transform', e.transform));
+svg.call(zoom);
+
+// Arrow marker
+svg.append('defs').append('marker')
+  .attr('id','arrow').attr('viewBox','0 0 10 10').attr('refX',20).attr('refY',5)
+  .attr('markerWidth',4).attr('markerHeight',4).attr('orient','auto')
+  .append('path').attr('d','M 0 0 L 10 5 L 0 10 z').attr('fill','#333');
+
+// Simulation
+simulation = d3.forceSimulation()
+  .force('link', d3.forceLink().id(d => d.id).distance(80).strength(0.3))
+  .force('charge', d3.forceManyBody().strength(-200))
+  .force('center', d3.forceCenter(width/2, height/2))
+  .force('collision', d3.forceCollide().radius(d => d.r + 5))
+  .on('tick', ticked);
+
+link = g.append('g').selectAll('line');
+node = g.append('g').selectAll('circle');
+labels = g.append('g').selectAll('text');
+
+function ticked() {
+  link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+  node.attr('cx',d=>d.x).attr('cy',d=>d.y);
+  labels.attr('x',d=>d.x).attr('y',d=>d.y-d.r-4);
+}
+
+function getNodeColor(d) {
+  if (d.group === 'memory') return COLORS[d.subtype] || COLORS.memory;
+  return COLORS[d.group] || '#555';
+}
+
+function getNodeRadius(d) {
+  if (d.group === 'channel' || d.group === 'topic') return 12;
+  if (d.group === 'memory') return 8;
+  return 5;
+}
+
+function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : s; }
+
+function updateGraph() {
+  const searchTerm = document.getElementById('search').value.toLowerCase();
+
+  let filteredNodes = allNodes.filter(n => {
+    if (n.group === 'channel' || n.group === 'topic') return true;
+    if (!activeFilters.has(n.group)) return false;
+    if (searchTerm && !n.label.toLowerCase().includes(searchTerm) && !(n.content||'').toLowerCase().includes(searchTerm)) return false;
+    return true;
+  });
+
+  const nodeIds = new Set(filteredNodes.map(n => n.id));
+  let filteredLinks = allLinks.filter(l => nodeIds.has(l.source.id||l.source) && nodeIds.has(l.target.id||l.target));
+
+  // Update links
+  link = link.data(filteredLinks, d => d.source.id+'-'+d.target.id);
+  link.exit().remove();
+  link = link.enter().append('line')
+    .attr('stroke','#1a1a2e').attr('stroke-width',0.5).attr('marker-end','url(#arrow)')
+    .merge(link);
+
+  // Update nodes
+  node = node.data(filteredNodes, d => d.id);
+  node.exit().remove();
+  const nodeEnter = node.enter().append('circle')
+    .attr('r', d => d.r)
+    .attr('fill', d => getNodeColor(d))
+    .attr('opacity', 0.8)
+    .attr('stroke', 'none')
+    .attr('cursor', 'pointer')
+    .call(d3.drag().on('start',dragStart).on('drag',dragging).on('end',dragEnd))
+    .on('mouseover', showTooltip)
+    .on('mouseout', hideTooltip)
+    .on('click', (e,d) => highlightConnected(d));
+  node = nodeEnter.merge(node);
+
+  // Update labels (only for hub nodes)
+  labels = labels.data(filteredNodes.filter(n => n.group==='channel'||n.group==='topic'), d => d.id);
+  labels.exit().remove();
+  labels = labels.enter().append('text')
+    .attr('text-anchor','middle').attr('font-size','9px').attr('fill','#64748b').attr('font-weight','600')
+    .text(d => d.label)
+    .merge(labels);
+
+  simulation.nodes(filteredNodes);
+  simulation.force('link').links(filteredLinks);
+  simulation.alpha(0.3).restart();
+
+  document.getElementById('nodeCount').textContent = filteredNodes.length;
+  document.getElementById('linkCount').textContent = filteredLinks.length;
+}
+
+function showTooltip(e, d) {
+  const tt = document.getElementById('tooltip');
+  document.getElementById('ttType').textContent = d.group + (d.subtype ? ' · ' + d.subtype : '');
+  document.getElementById('ttType').style.color = getNodeColor(d);
+  document.getElementById('ttContent').textContent = d.content || d.label;
+  document.getElementById('ttTime').textContent = d.time || '';
+  tt.style.display = 'block';
+  tt.style.left = Math.min(e.clientX + 15, window.innerWidth - 370) + 'px';
+  tt.style.top = Math.min(e.clientY + 15, window.innerHeight - 180) + 'px';
+}
+
+function hideTooltip() { document.getElementById('tooltip').style.display = 'none'; }
+
+function highlightConnected(d) {
+  const connected = new Set([d.id]);
+  allLinks.forEach(l => {
+    const sid = l.source.id||l.source, tid = l.target.id||l.target;
+    if (sid === d.id) connected.add(tid);
+    if (tid === d.id) connected.add(sid);
+  });
+  node.attr('opacity', n => connected.has(n.id) ? 1 : 0.1);
+  link.attr('opacity', l => connected.has(l.source.id||l.source) && connected.has(l.target.id||l.target) ? 0.6 : 0.03);
+  labels.attr('opacity', n => connected.has(n.id) ? 1 : 0.1);
+
+  setTimeout(() => {
+    node.attr('opacity', 0.8);
+    link.attr('opacity', 1);
+    labels.attr('opacity', 1);
+  }, 3000);
+}
+
+function dragStart(e,d) { if(!e.active)simulation.alphaTarget(0.3).restart(); d.fx=d.x;d.fy=d.y; }
+function dragging(e,d) { d.fx=e.x;d.fy=e.y; }
+function dragEnd(e,d) { if(!e.active)simulation.alphaTarget(0); d.fx=null;d.fy=null; }
+
+// Extract keywords for topic nodes
+function extractTopics(text) {
+  const topics = [];
+  const kw = ['claude','gpt','gemini','notion','github','telegram','briefing','cron','heartbeat','lordex','countdown','austra','portfolio','weather','clima','monitor','bitcoin','crypto','wiki','notion','modelo','model','agi','deploy','push','commit'];
+  const lower = (text||'').toLowerCase();
+  kw.forEach(k => { if (lower.includes(k)) topics.push(k); });
+  return topics;
+}
+
+// Build graph from data
+function buildGraph(conversations, memories) {
+  const nodeMap = new Map();
+  const links = [];
+  const channels = new Set();
+  const topicNodes = new Map();
+
+  // Channel hub nodes
+  ['telegram','system','heartbeat'].forEach(ch => {
+    const id = 'ch_'+ch;
+    if (!nodeMap.has(id)) {
+      nodeMap.set(id, {id, label:ch, group:'channel', r:14, content:'Canal: '+ch});
+      channels.add(id);
+    }
+  });
+
+  // Conversation nodes
+  conversations.forEach(c => {
+    const id = 'conv_'+c.id;
+    nodeMap.set(id, {
+      id, label: truncate(c.content, 40), group: c.role,
+      content: c.content, r: getNodeRadius({group:c.role}),
+      time: new Date(c.timestamp).toLocaleString('es-UY'),
+      subtype: c.channel
+    });
+
+    // Link to channel
+    const chId = 'ch_'+(c.channel||'system');
+    if (nodeMap.has(chId)) links.push({source:chId, target:id});
+
+    // Link sequential conversations
+    if (c.id > 1) {
+      const prevId = 'conv_'+(c.id-1);
+      if (nodeMap.has(prevId)) links.push({source:prevId, target:id});
+    }
+
+    // Topic extraction
+    extractTopics(c.content).forEach(t => {
+      const tid = 'topic_'+t;
+      if (!topicNodes.has(tid)) {
+        topicNodes.set(tid, {id:tid, label:t, group:'topic', r:12, content:'Topic: '+t});
+      }
+      links.push({source:tid, target:id});
+    });
+  });
+
+  // Memory nodes
+  memories.forEach(m => {
+    const id = 'mem_'+m.id;
+    nodeMap.set(id, {
+      id, label: m.name, group:'memory', subtype:m.type,
+      content: m.description, r:8,
+      time: new Date(m.created_at).toLocaleString('es-UY')
+    });
+
+    // Link memories to topics
+    extractTopics(m.name + ' ' + m.description).forEach(t => {
+      const tid = 'topic_'+t;
+      if (!topicNodes.has(tid)) {
+        topicNodes.set(tid, {id:tid, label:t, group:'topic', r:12, content:'Topic: '+t});
+      }
+      links.push({source:tid, target:id});
+    });
+  });
+
+  // Add topic nodes
+  topicNodes.forEach((v,k) => nodeMap.set(k, v));
+
+  allNodes = Array.from(nodeMap.values());
+  allLinks = links;
+  updateGraph();
+}
+
+// Fetch data
+async function fetchData() {
+  try {
+    const [convRes, memRes] = await Promise.all([
+      fetch(API+'/conversation/recent?limit=99999').then(r=>r.json()),
+      fetch(API+'/memory/list').then(r=>r.json())
+    ]);
+    const conversations = convRes.results || convRes || [];
+    const memories = memRes.results || memRes || [];
+
+    if (conversations.length > 0) {
+      const latest = conversations[0];
+      lastConvId = latest.id;
+      document.getElementById('lastUpdate').textContent = new Date(latest.timestamp).toLocaleTimeString('es-UY');
+    }
+
+    logsData = conversations;
+    buildGraph(conversations, memories);
+    if (currentTab === 'logs') renderLogs();
+  } catch(e) {
+    console.error('Fetch error:', e);
+  }
+}
+
+// Poll for new data
+async function pollUpdates() {
+  try {
+    const res = await fetch(API+'/conversation/recent?limit=5').then(r=>r.json());
+    const convs = res.results || res || [];
+    if (convs.length > 0 && convs[0].id > lastConvId) {
+      lastConvId = convs[0].id;
+      document.getElementById('lastUpdate').textContent = new Date(convs[0].timestamp).toLocaleTimeString('es-UY');
+      fetchData(); // Rebuild with new data
+    }
+  } catch(e) {}
+}
+
+// Filters
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const f = btn.dataset.filter;
+    if (f === 'all') {
+      const allActive = document.querySelectorAll('.filter-btn.active').length === 5;
+      document.querySelectorAll('.filter-btn').forEach(b => {
+        if (allActive) { b.classList.remove('active'); activeFilters.clear(); }
+        else { b.classList.add('active'); activeFilters.add(b.dataset.filter); }
+      });
+    } else {
+      btn.classList.toggle('active');
+      if (activeFilters.has(f)) activeFilters.delete(f); else activeFilters.add(f);
+    }
+    updateGraph();
+  });
+});
+
+// Search
+document.getElementById('search').addEventListener('input', () => updateGraph());
+
+// Resize
+window.addEventListener('resize', () => {
+  const w = window.innerWidth, h = window.innerHeight;
+  svg.attr('width',w).attr('height',h);
+  simulation.force('center', d3.forceCenter(w/2, h/2));
+  simulation.alpha(0.1).restart();
+});
+
+// === Tab Switching ===
+let currentTab = 'graph';
+let logsData = [];
+
+function switchTab(tab) {
+  currentTab = tab;
+  location.hash = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+
+  document.getElementById('graph').style.display = tab === 'graph' ? 'block' : 'none';
+  document.getElementById('logsPanel').style.display = tab === 'logs' ? 'block' : 'none';
+  document.getElementById('archPanel').style.display = tab === 'arch' ? 'block' : 'none';
+  document.getElementById('ragPanel').style.display = tab === 'rag' ? 'block' : 'none';
+  document.body.style.overflow = (tab === 'logs' || tab === 'rag') ? 'auto' : 'hidden';
+
+  document.querySelector('.filters').style.display = tab === 'graph' ? 'flex' : 'none';
+  document.querySelector('.legend').style.display = tab === 'graph' ? 'flex' : 'none';
+
+  if (tab === 'logs') renderLogs();
+  if (tab === 'arch') renderArch();
+  if (tab === 'rag') loadRagDashboard();
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+
+// Restore tab from hash (deferred to ensure all data is defined)
+window.addEventListener('hashchange', () => {
+  const h = location.hash.replace('#','');
+  if (['logs','graph','arch','rag'].includes(h)) switchTab(h);
+});
+
+function getCollapsedStates() {
+  try { return JSON.parse(localStorage.getItem('logCollapsed') || '{}'); } catch(e) { return {}; }
+}
+function getCollapsedState(date) {
+  return getCollapsedStates()[date] || false;
+}
+function toggleCollapse(el, date) {
+  el.classList.toggle('collapsed');
+  el.parentElement.classList.toggle('collapsed');
+  const states = getCollapsedStates();
+  states[date] = el.classList.contains('collapsed');
+  localStorage.setItem('logCollapsed', JSON.stringify(states));
+}
+
+function renderLogs() {
+  const panel = document.getElementById('logsPanel');
+  const searchTerm = document.getElementById('search').value.toLowerCase();
+
+  let filtered = logsData;
+  if (searchTerm) {
+    filtered = filtered.filter(c => (c.content||'').toLowerCase().includes(searchTerm) || (c.role||'').includes(searchTerm) || (c.channel||'').includes(searchTerm));
+  }
+
+  // Group by date
+  const groups = {};
+  filtered.forEach(c => {
+    const date = new Date(c.timestamp).toLocaleDateString('es-UY', {weekday:'long', year:'numeric', month:'long', day:'numeric'});
+    if (!groups[date]) groups[date] = [];
+    groups[date].push(c);
+  });
+
+  let html = `<div class="log-search-info">${filtered.length} logs encontrados</div>`;
+
+  Object.entries(groups).forEach(([date, entries]) => {
+    const isCollapsed = getCollapsedState(date);
+    html += `<div class="log-date-group${isCollapsed?' collapsed':''}" data-date="${date}">`;
+    html += `<div class="log-date-header${isCollapsed?' collapsed':''}" onclick="toggleCollapse(this,'${date.replace(/'/g,'')}')"><span>${date} (${entries.length})</span><span class="arrow">▼</span></div>`;
+    entries.forEach(c => {
+      const time = new Date(c.timestamp).toLocaleTimeString('es-UY', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      html += `<div class="log-entry">
+        <div class="log-meta">
+          <span class="log-time">${time}</span>
+          <span class="log-role ${c.role}">${c.role}</span>
+          <span class="log-channel">${c.channel || ''}</span>
+        </div>
+        <div class="log-content">${(c.content||'').replace(/</g,'&lt;')}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  });
+
+  panel.innerHTML = html;
+}
+
+// Update search to also filter logs
+document.getElementById('search').addEventListener('input', () => {
+  if (currentTab === 'graph') updateGraph();
+  else renderLogs();
+});
+
+// === Architecture View ===
+var ARCH_NODES = [
+  {id:'claude-code', name:'Claude Code', type:'core', status:'online', details:'CLI principal, orquestación de Friday. Claude Opus 4.6, 1M context.'},
+  {id:'memory-api', name:'Memory API', type:'core', status:'online', port:7777, details:'Flask server, SQLite DB. Endpoints: /conversation, /memory, /entity, /graph'},
+  {id:'telegram-bot', name:'Telegram Bot', type:'service', status:'online', details:'Plugin MCP, chat_id 336913265. Envía/recibe mensajes, audios, archivos.'},
+  {id:'notion', name:'Notion', type:'service', status:'online', details:'MCP integrado. Wiki personal, databases, notas. 18+ páginas.'},
+  {id:'github', name:'GitHub', type:'service', status:'online', details:'3 repos: agi-countdown, austra, portfolio. Push via git-credentials.'},
+  {id:'elevenlabs', name:'ElevenLabs', type:'service', status:'online', details:'TTS voz Pau, STT Scribe, SFX. API key en .env.'},
+  {id:'agentmail', name:'AgentMail', type:'service', status:'online', details:'Email sam-assistant@agentmail.to. Check cada hora.'},
+  {id:'open-meteo', name:'Open-Meteo', type:'data', status:'online', details:'Clima Montevideo. API gratis, sin auth. Cache 30min.'},
+  {id:'dolarapi', name:'DolarAPI', type:'data', status:'online', details:'Cotizaciones UYU. uy.dolarapi.com, sin auth.'},
+  {id:'bcu-brou', name:'BCU/BROU', type:'data', status:'online', details:'Scraping HTML con Cheerio. Cotizaciones oficiales.'},
+  {id:'web-search', name:'Web Search', type:'data', status:'online', details:'Búsqueda en tiempo real. WebSearch + WebFetch tools.'},
+  {id:'briefing', name:'Briefing', type:'cron', status:'online', details:'8:57 AM. Clima + divisas + noticias IA + películas.'},
+  {id:'heartbeat', name:'Heartbeat', type:'cron', status:'online', details:'Cada hora :43. Verificación de sistema y crons.'},
+  {id:'email-check', name:'Email Check', type:'cron', status:'online', details:'Cada hora :13. Revisa sam-assistant@agentmail.to.'},
+  {id:'ai-monitor', name:'AI Monitor', type:'cron', status:'online', details:'10:17 AM. 7 agentes paralelos buscan modelos nuevos.'},
+  {id:'lordex', name:'Lordex AM/PM', type:'cron', status:'online', details:'9:03 AM y 9:03 PM. Recordatorio medicación.'},
+  {id:'watchdog', name:'Watchdog', type:'cron', status:'online', details:'Cada 6hs :23. Verifica expiración de crons.'},
+  {id:'road-to-agi', name:'Road to AGI', type:'project', status:'online', details:'countdowntoai.com. 424+ modelos. GitHub Pages.'},
+  {id:'austra', name:'Austra', type:'project', status:'online', details:'Super app Uruguay. Node.js + Express + MongoDB.'},
+  {id:'portfolio', name:'Portfolio', type:'project', status:'online', details:'missingus3r.github.io. Dark premium design.'},
+  {id:'memory-graph', name:'Memory Graph', type:'project', status:'online', details:'Visualización D3.js del grafo de memoria de Friday.'},
+  {id:'sqlite-db', name:'SQLite DB', type:'storage', status:'online', details:'~0.44 MB. 700+ logs, 30+ memorias, 3 entidades.'},
+  {id:'notas-md', name:'notas.md', type:'storage', status:'online', details:'~/notas/notas.md. Archivo local de notas.'},
+  {id:'embeddings', name:'Embeddings', type:'storage', status:'online', details:'Tabla embeddings en SQLite. 800+ vectores 3072-dim. Gemini Embedding 001 free tier.'},
+  {id:'gemini-embed', name:'Gemini Embed', type:'data', status:'online', details:'Gemini Embedding 001. 3072 dimensiones. Free tier (60 req/min). Genera embeddings para RAG.'},
+  {id:'rag-search', name:'RAG Search', type:'service', status:'online', details:'Búsqueda semántica + híbrida. Endpoints: /search/semantic, /search/hybrid. Cosine similarity + RRF.'},
+];
+
+var ARCH_LINKS = [
+  {source:'claude-code', target:'memory-api', type:'data', label:'log/recall'},
+  {source:'claude-code', target:'telegram-bot', type:'data', label:'send/receive'},
+  {source:'claude-code', target:'notion', type:'data', label:'read/write'},
+  {source:'claude-code', target:'github', type:'data', label:'commit/push'},
+  {source:'claude-code', target:'elevenlabs', type:'data', label:'TTS/STT'},
+  {source:'claude-code', target:'agentmail', type:'data', label:'check email'},
+  {source:'claude-code', target:'web-search', type:'data', label:'search/fetch'},
+  {source:'memory-api', target:'sqlite-db', type:'data', label:'read/write'},
+  {source:'memory-api', target:'memory-graph', type:'data', label:'serves /graph'},
+  {source:'claude-code', target:'open-meteo', type:'data', label:'weather'},
+  {source:'claude-code', target:'dolarapi', type:'data', label:'rates'},
+  {source:'claude-code', target:'bcu-brou', type:'data', label:'scraping'},
+  {source:'heartbeat', target:'claude-code', type:'control', label:'trigger'},
+  {source:'briefing', target:'claude-code', type:'control', label:'trigger'},
+  {source:'email-check', target:'agentmail', type:'control', label:'poll'},
+  {source:'ai-monitor', target:'github', type:'control', label:'push models'},
+  {source:'watchdog', target:'briefing', type:'monitoring', label:'verify'},
+  {source:'watchdog', target:'heartbeat', type:'monitoring', label:'verify'},
+  {source:'watchdog', target:'email-check', type:'monitoring', label:'verify'},
+  {source:'watchdog', target:'ai-monitor', type:'monitoring', label:'verify'},
+  {source:'watchdog', target:'lordex', type:'monitoring', label:'verify'},
+  {source:'lordex', target:'telegram-bot', type:'control', label:'reminder'},
+  {source:'claude-code', target:'notas-md', type:'data', label:'write'},
+  {source:'claude-code', target:'rag-search', type:'data', label:'search'},
+  {source:'rag-search', target:'embeddings', type:'data', label:'cosine sim'},
+  {source:'rag-search', target:'sqlite-db', type:'data', label:'FTS5'},
+  {source:'memory-api', target:'gemini-embed', type:'data', label:'generate'},
+  {source:'gemini-embed', target:'embeddings', type:'data', label:'store vectors'},
+  {source:'telegram-bot', target:'claude-code', type:'data', label:'user messages'},
+];
+
+var ARCH_COLORS = {core:'#ff6b6b', service:'#60a5fa', data:'#34d399', cron:'#fbbf24', project:'#c084fc', storage:'#fb923c'};
+var ARCH_RADII = {core:30, service:20, data:20, cron:14, project:20, storage:20};
+
+var archRendered = false;
+var archStatuses = {};
+
+function closeArchModal() {
+  document.getElementById('archModal').style.display = 'none';
+  document.getElementById('archOverlay').style.display = 'none';
+}
+
+function showArchNodeModal(d) {
+  const color = ARCH_COLORS[d.type];
+  const status = archStatuses[d.id] || d.status;
+  const statusColor = status === 'online' ? '#34d399' : status === 'idle' ? '#fbbf24' : '#ef4444';
+  const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+  let html = `<h2 style="color:${color}">${d.name}</h2>`;
+  html += `<div class="modal-row"><span class="status-badge"><span class="status-dot" style="background:${statusColor}"></span>${statusLabel}</span></div>`;
+  html += `<div class="modal-row"><b>Type:</b> ${d.type}</div>`;
+  if (d.port) html += `<div class="modal-row"><b>Port:</b> ${d.port}</div>`;
+  html += `<div class="modal-details">${d.details}</div>`;
+  document.getElementById('archModalContent').innerHTML = html;
+  document.getElementById('archModal').style.display = 'block';
+  document.getElementById('archOverlay').style.display = 'block';
+}
+
+function showArchLinkModal(d) {
+  const typeColors = {data:'#334155', control:'#fbbf24', monitoring:'#94a3b8'};
+  let html = `<h2 style="color:${typeColors[d.type]||'#e2e8f0'}">${d.sourceName} → ${d.targetName}</h2>`;
+  html += `<div class="modal-row"><b>Type:</b> ${d.type}</div>`;
+  html += `<div class="modal-row"><b>Label:</b> ${d.label}</div>`;
+  document.getElementById('archModalContent').innerHTML = html;
+  document.getElementById('archModal').style.display = 'block';
+  document.getElementById('archOverlay').style.display = 'block';
+}
+
+function checkStatuses() {
+  fetch(API + '/health').then(r => {
+    if (r.ok) { archStatuses['memory-api'] = 'online'; archStatuses['sqlite-db'] = 'online'; }
+    else { archStatuses['memory-api'] = 'offline'; archStatuses['sqlite-db'] = 'offline'; }
+  }).catch(() => { archStatuses['memory-api'] = 'offline'; archStatuses['sqlite-db'] = 'offline'; });
+  archStatuses['claude-code'] = 'online';
+  archStatuses['memory-graph'] = 'online';
+}
+
+checkStatuses();
+setInterval(() => {
+  checkStatuses();
+  // Update status dots in arch view
+  setTimeout(() => {
+    d3.selectAll('.arch-status').attr('fill', function() {
+      const d = d3.select(this.parentNode).datum();
+      if (!d) return '#34d399';
+      const s = archStatuses[d.id] || d.status;
+      return s === 'online' ? '#34d399' : s === 'idle' ? '#fbbf24' : '#ef4444';
+    });
+  }, 2000);
+}, 30000);
+
+function saveArchPositions() {
+  const positions = {};
+  ARCH_NODES.forEach(n => { if (n._fx !== undefined) positions[n.id] = {x: n.fx || n._fx, y: n.fy || n._fy}; });
+  fetch(API + '/kv/archPositions', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(positions)}).catch(()=>{});
+}
+let _archPosCache = null;
+async function loadArchPositions() {
+  if (_archPosCache) return _archPosCache;
+  try { _archPosCache = await fetch(API + '/kv/archPositions').then(r=>r.json()); return _archPosCache; } catch(e) { return {}; }
+}
+
+async function renderArch() {
+  if (archRendered) return;
+  archRendered = true;
+
+  const panel = document.getElementById('archPanel');
+  const w = window.innerWidth;
+  const h = window.innerHeight - 50;
+  const cx = w / 2;
+  const cy = h / 2;
+
+  // Fixed grid positions for clean layout
+  const byType = {};
+  ARCH_NODES.forEach(n => { if (!byType[n.type]) byType[n.type] = []; byType[n.type].push(n); });
+
+  // Layout: rows with centered nodes, generous spacing
+  const rowY = {core: cy - 40, service: cy - 200, data: cy + 120, cron: cy + 300, project: cy - 200, storage: cy + 120};
+  const rowX = {core: cx, service: cx + 250, data: cx + 250, cron: cx, project: cx - 300, storage: cx - 200};
+
+  function spreadRow(type, baseX, baseY, spacing) {
+    const items = byType[type] || [];
+    const totalW = (items.length - 1) * spacing;
+    const startX = baseX - totalW / 2;
+    items.forEach((n, i) => { n._fx = startX + i * spacing; n._fy = baseY; });
+  }
+
+  // Core: center, side by side
+  spreadRow('core', cx, cy - 20, 160);
+  // Services: arc above right
+  spreadRow('service', cx + 180, cy - 220, 120);
+  // Data sources: right side
+  spreadRow('data', cx + 300, cy + 100, 100);
+  // Crons: bottom row
+  spreadRow('cron', cx, cy + 280, 110);
+  // Projects: left side
+  spreadRow('project', cx - 300, cy - 120, 100);
+  // Storage: below center-left
+  spreadRow('storage', cx - 180, cy + 100, 120);
+
+  const savedPos = await loadArchPositions();
+  const nodes = ARCH_NODES.map(n => {
+    const saved = savedPos[n.id];
+    const px = saved ? saved.x : n._fx;
+    const py = saved ? saved.y : n._fy;
+    return {...n, x: px, y: py, fx: px, fy: py, r: ARCH_RADII[n.type]};
+  });
+
+  const nodeMap = {};
+  nodes.forEach(n => nodeMap[n.id] = n);
+
+  const links = ARCH_LINKS.map(l => ({
+    source: l.source,
+    target: l.target,
+    type: l.type,
+    label: l.label,
+    sourceName: nodeMap[l.source]?.name || l.source,
+    targetName: nodeMap[l.target]?.name || l.target,
+  }));
+
+  const archSvg = d3.select('#archPanel').append('svg')
+    .attr('class','arch-svg').attr('width',w).attr('height',h);
+
+  const archG = archSvg.append('g');
+
+  // Zoom
+  archSvg.call(d3.zoom().scaleExtent([0.2, 5]).on('zoom', e => archG.attr('transform', e.transform)));
+
+  // Arrow markers per type
+  const defs = archSvg.append('defs');
+  ['data','control','monitoring'].forEach(t => {
+    const colors = {data:'#334155', control:'#fbbf24', monitoring:'#94a3b8'};
+    defs.append('marker').attr('id','arch-arrow-'+t).attr('viewBox','0 0 10 10')
+      .attr('refX',10).attr('refY',5).attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto')
+      .append('path').attr('d','M 0 0 L 10 5 L 0 10 z').attr('fill',colors[t]);
+  });
+
+  // Links
+  const archLink = archG.append('g').selectAll('line').data(links).enter().append('line')
+    .attr('class', d => 'arch-link arch-link-' + d.type)
+    .attr('marker-end', d => 'url(#arch-arrow-' + d.type + ')')
+    .attr('cursor','pointer')
+    .on('click', (e, d) => showArchLinkModal(d));
+
+  // Link labels
+  const linkLabels = archG.append('g').selectAll('text').data(links).enter().append('text')
+    .attr('class','arch-link-label').text(d => d.label);
+
+  // Node groups
+  const archNode = archG.append('g').selectAll('g').data(nodes).enter().append('g')
+    .attr('cursor','pointer')
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) archSim.alphaTarget(0.3).restart(); })
+      .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end', (e, d) => { if (!e.active) archSim.alphaTarget(0); saveArchPositions(); })
+    )
+    .on('click', (e, d) => showArchNodeModal(d));
+
+  // Glow filter
+  const glowFilter = defs.append('filter').attr('id','arch-glow');
+  glowFilter.append('feGaussianBlur').attr('stdDeviation','3').attr('result','blur');
+  glowFilter.append('feMerge').selectAll('feMergeNode').data(['blur','SourceGraphic']).enter().append('feMergeNode').attr('in', d => d);
+
+  // Node circles
+  archNode.append('circle')
+    .attr('r', d => d.r)
+    .attr('fill', d => ARCH_COLORS[d.type])
+    .attr('opacity', 0.85)
+    .attr('filter','url(#arch-glow)')
+    .attr('class','arch-node');
+
+  // Status indicator
+  archNode.append('circle')
+    .attr('class','arch-status')
+    .attr('r', 4)
+    .attr('cx', d => d.r * 0.7)
+    .attr('cy', d => -d.r * 0.7)
+    .attr('fill', d => {
+      const s = archStatuses[d.id] || d.status;
+      return s === 'online' ? '#34d399' : s === 'idle' ? '#fbbf24' : '#ef4444';
+    })
+    .attr('stroke','#0a0a0f').attr('stroke-width',2);
+
+  // Labels
+  archNode.append('text')
+    .attr('class','arch-label')
+    .attr('y', d => d.r + 16)
+    .text(d => d.name);
+
+  // Force simulation (fixed positions, just for link routing)
+  const archSim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(100).strength(0))
+    .on('tick', () => {
+      archLink
+        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => {
+          const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+          const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+          const r = nodeMap[d.target.id]?.r || 20;
+          return d.target.x - dx/dist * (r + 8);
+        })
+        .attr('y2', d => {
+          const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+          const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+          const r = nodeMap[d.target.id]?.r || 20;
+          return d.target.y - dy/dist * (r + 8);
+        });
+      linkLabels
+        .attr('x', d => (d.source.x + d.target.x) / 2)
+        .attr('y', d => (d.source.y + d.target.y) / 2 - 4);
+      archNode.attr('transform', d => `translate(${d.x},${d.y})`);
+    });
+
+  // Update status indicators periodically
+  setInterval(() => {
+    archNode.select('.arch-status').attr('fill', d => {
+      const s = archStatuses[d.id] || d.status;
+      return s === 'online' ? '#34d399' : s === 'idle' ? '#fbbf24' : '#ef4444';
+    });
+  }, 5000);
+}
+
+// Init
+fetchData();
+setInterval(pollUpdates, 10000); // Poll every 10s
+
+// === RAG Dashboard ===
+async function loadRagDashboard() {
+  const dash = document.getElementById('ragDashboard');
+  try {
+    const [embStats, apiStats] = await Promise.all([
+      fetch(API + '/embeddings/stats').then(r => r.json()),
+      fetch(API + '/stats').then(r => r.json())
+    ]);
+    const total = embStats.total || 0;
+    const convCount = (embStats.by_type || {}).conversation || 0;
+    const memCount = (embStats.by_type || {}).memory || 0;
+    const totalConv = apiStats.conversations || 0;
+    const totalMem = apiStats.memories || 0;
+    const coverage = totalConv > 0 ? Math.round(convCount / totalConv * 100) : 0;
+    const dbSize = apiStats.db_size_mb || 0;
+
+    dash.innerHTML = `
+      <div class="rag-card"><div class="rag-card-value">${total}</div><div class="rag-card-label">Total Embeddings</div></div>
+      <div class="rag-card"><div class="rag-card-value">${convCount}<span class="rag-card-sub">/ ${totalConv}</span></div><div class="rag-card-label">Conversaciones</div></div>
+      <div class="rag-card"><div class="rag-card-value">${memCount}<span class="rag-card-sub">/ ${totalMem}</span></div><div class="rag-card-label">Memorias</div></div>
+      <div class="rag-card"><div class="rag-card-value">${coverage}%</div><div class="rag-card-label">Cobertura</div></div>
+      <div class="rag-card"><div class="rag-card-value">${EMBED_DIM || 3072}</div><div class="rag-card-label">Dimensiones</div></div>
+      <div class="rag-card"><div class="rag-card-value">${dbSize} MB</div><div class="rag-card-label">DB Size</div></div>
+    `;
+  } catch(e) {
+    dash.innerHTML = '<div style="color:#ef4444;font-size:12px">Error cargando stats</div>';
+  }
+}
+var EMBED_DIM = 3072;
+
+async function doRagSearch() {
+  const q = document.getElementById('ragQuery').value.trim();
+  if (!q) return;
+  const mode = document.getElementById('ragMode').value;
+  const results = document.getElementById('ragResults');
+  results.innerHTML = '<div style="color:#475569;font-size:12px">Buscando...</div>';
+
+  try {
+    const url = mode === 'semantic'
+      ? API + '/search/semantic?q=' + encodeURIComponent(q) + '&limit=15'
+      : API + '/search/hybrid?q=' + encodeURIComponent(q) + '&limit=15';
+    const data = await fetch(url).then(r => r.json());
+    const items = data.results || [];
+
+    if (items.length === 0) {
+      results.innerHTML = '<div style="color:#475569;font-size:13px;padding:20px;text-align:center">Sin resultados</div>';
+      return;
+    }
+
+    let html = `<div style="font-size:11px;color:#475569;margin-bottom:8px">${items.length} resultados</div>`;
+    items.forEach((item, i) => {
+      const score = item.score || item.semantic_score || item.rrf_score || 0;
+      const scoreClass = score > 0.7 ? 'high' : score > 0.5 ? 'mid' : 'low';
+      const scoreLabel = mode === 'hybrid' ? (item.rrf_score || 0).toFixed(4) : score.toFixed(4);
+      const type = item.source_type || (item.role ? 'conversation' : 'unknown');
+      const content = item.text_preview || item.content || '';
+      const time = item.created_at || item.timestamp || '';
+      const timeStr = time ? new Date(time).toLocaleString('es-UY') : '';
+
+      html += `<div class="rag-result">
+        <div class="rag-meta">
+          <span class="rag-score ${scoreClass}">${scoreLabel}</span>
+          <span class="rag-type ${type}">${type}</span>
+          ${item.role ? '<span style="font-size:10px;color:#64748b">' + item.role + '</span>' : ''}
+          ${item.channel ? '<span style="font-size:10px;color:#f472b6">' + item.channel + '</span>' : ''}
+          <span class="rag-time">${timeStr}</span>
+        </div>
+        <div class="rag-content">${content.replace(/</g,'&lt;')}</div>
+      </div>`;
+    });
+    results.innerHTML = html;
+  } catch(e) {
+    results.innerHTML = '<div style="color:#ef4444;font-size:12px">Error: ' + e.message + '</div>';
+  }
+}
+
+function doReindex() {
+  document.getElementById('reindexStatus').textContent = 'Reindexando...';
+  document.getElementById('reindexBtn').disabled = true;
+  fetch(API + '/embeddings/reindex', {method:'POST'}).then(r => r.json()).then(d => {
+    document.getElementById('reindexStatus').textContent = 'Reindex iniciado en background. Refrescá en unos minutos.';
+    document.getElementById('reindexBtn').disabled = false;
+    setTimeout(loadRagDashboard, 10000);
+  }).catch(e => {
+    document.getElementById('reindexStatus').textContent = 'Error: ' + e.message;
+    document.getElementById('reindexBtn').disabled = false;
+  });
+}
+
+// Restore tab from hash (after all data is defined)
+const hashTab = location.hash.replace('#','');
+if (['logs','graph','arch','rag'].includes(hashTab)) switchTab(hashTab);
+</script>
+</body>
+</html>
