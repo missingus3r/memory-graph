@@ -874,6 +874,19 @@ async function renderArch() {
       archNode.attr('transform', d => `translate(${d.x},${d.y})`);
     });
 
+  // Auto-center: compute bounding box of all nodes and fit to viewport
+  setTimeout(() => {
+    const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+    const minX = Math.min(...xs) - 60, maxX = Math.max(...xs) + 60;
+    const minY = Math.min(...ys) - 60, maxY = Math.max(...ys) + 60;
+    const bw = maxX - minX, bh = maxY - minY;
+    const scale = Math.min(w / bw, h / bh, 1) * 0.85;
+    const tx = (w - bw * scale) / 2 - minX * scale;
+    const ty = (h - bh * scale) / 2 - minY * scale;
+    const t = d3.zoomIdentity.translate(tx, ty).scale(scale);
+    archSvg.call(d3.zoom().scaleExtent([0.2, 5]).on('zoom', e => archG.attr('transform', e.transform)).transform, t);
+  }, 100);
+
   // Update status indicators periodically
   setInterval(() => {
     archNode.select('.arch-status').attr('fill', d => {
