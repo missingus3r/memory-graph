@@ -42,9 +42,27 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
+
+
+def safe_int(val, default=50, min_val=1, max_val=1000):
+    """Safely parse an integer with bounds clamping."""
+    try:
+        v = int(val)
+        return max(min_val, min(v, max_val))
+    except (TypeError, ValueError):
+        return default
+
+
+def clamp_float(val, default=0.5, lo=0.0, hi=1.0):
+    """Safely parse a float and clamp to [lo, hi]."""
+    try:
+        v = float(val)
+        return max(lo, min(v, hi))
+    except (TypeError, ValueError):
+        return default
 
 
 def get_db():
@@ -160,6 +178,7 @@ def now_iso():
 _URL_RE = re.compile(r"https?://")
 _keywords_cache = {}
 _keywords_cache_ts = 0
+_keywords_lock = threading.Lock()
 
 _DEFAULT_KEYWORDS = {
     "nota ": 1.0, "nota:": 1.0, "save": 1.0, "guarda": 1.0,
@@ -189,17 +208,18 @@ def _load_keywords():
     global _keywords_cache, _keywords_cache_ts
     import time
     now = time.time()
-    if _keywords_cache and (now - _keywords_cache_ts) < 60:
+    with _keywords_lock:
+        if _keywords_cache and (now - _keywords_cache_ts) < 60:
+            return _keywords_cache
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            rows = conn.execute("SELECT keyword, score FROM importance_keywords ORDER BY score DESC").fetchall()
+            conn.close()
+            _keywords_cache = {r[0]: r[1] for r in rows}
+            _keywords_cache_ts = now
+        except Exception:
+            _keywords_cache = _DEFAULT_KEYWORDS
         return _keywords_cache
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        rows = conn.execute("SELECT keyword, score FROM importance_keywords ORDER BY score DESC").fetchall()
-        conn.close()
-        _keywords_cache = {r[0]: r[1] for r in rows}
-        _keywords_cache_ts = now
-    except Exception:
-        _keywords_cache = _DEFAULT_KEYWORDS
-    return _keywords_cache
 
 
 def classify_importance(role, content):
@@ -363,7 +383,7 @@ def conversation_log():
 def conversation_search():
     db = get_db()
     query = request.args.get("q", "")
-    limit = int(request.args.get("limit", "20"))
+    limit = safe_int(request.args.get("limit", "20"), default=20)
     channel = request.args.get("channel", "")
     role = request.args.get("role", "")
 
@@ -396,7 +416,7 @@ def conversation_search():
 @app.route("/conversation/recent")
 def conversation_recent():
     db = get_db()
-    limit = int(request.args.get("limit", "50"))
+    limit = safe_int(request.args.get("limit", "50"), default=50)
     channel = request.args.get("channel", "")
 
     sql = "SELECT id, timestamp, role, content, channel, session_id FROM conversations"
@@ -419,7 +439,7 @@ def conversation_summarize():
     """Generate weekly summaries for old logs without deleting originals."""
     db = get_db()
     data = request.json or {}
-    days_old = int(data.get("days_old", 7))
+    days_old = safe_int(data.get("days_old", 7), default=7, min_val=1, max_val=365)
 
     cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_old)).isoformat()
 
@@ -569,7 +589,7 @@ def memory_search():
     db = get_db()
     query = request.args.get("q", "")
     mem_type = request.args.get("type", "")
-    limit = int(request.args.get("limit", "10"))
+    limit = safe_int(request.args.get("limit", "10"), default=10)
 
     if not query:
         return jsonify({"error": "q parameter required"}), 400
@@ -600,7 +620,7 @@ def memory_search():
 def memory_list():
     db = get_db()
     mem_type = request.args.get("type", "")
-    limit = int(request.args.get("limit", "50"))
+    limit = safe_int(request.args.get("limit", "50"), default=50)
 
     sql = "SELECT id, type, name, description, tags, created_at, updated_at FROM memories"
     params = []
@@ -635,7 +655,7 @@ def memory_delete(mem_id):
 def memory_recall():
     db = get_db()
     topic = request.args.get("topic", "")
-    limit = int(request.args.get("limit", "10"))
+    limit = safe_int(request.args.get("limit", "10"), default=10)
 
     if not topic:
         return jsonify({"error": "topic parameter required"}), 400
@@ -700,7 +720,7 @@ def entity_search():
     db = get_db()
     query = request.args.get("q", "")
     ent_type = request.args.get("type", "")
-    limit = int(request.args.get("limit", "20"))
+    limit = safe_int(request.args.get("limit", "20"), default=20)
 
     sql = "SELECT id, name, type, details, created_at, updated_at FROM entities WHERE 1=1"
     params = []
@@ -718,6 +738,13 @@ def entity_search():
                 "created_at": r[4], "updated_at": r[5]} for r in rows]
 
     return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/entity/<int:id>", methods=["DELETE"])
+def entity_delete(id):
+    db = get_db()
+    db.execute("DELETE FROM entities WHERE id = ?", [id])
+    return jsonify({"status": "deleted", "id": id})
 
 
 @app.route("/stats")
@@ -741,7 +768,7 @@ def stats():
 def semantic_search():
     """Semantic search using embeddings."""
     q = request.args.get("q", "")
-    limit = int(request.args.get("limit", "10"))
+    limit = safe_int(request.args.get("limit", "10"), default=10)
     source_type = request.args.get("type", "")
 
     if not q:
@@ -752,14 +779,16 @@ def semantic_search():
         return jsonify({"error": "embedding generation failed"}), 500
 
     conn = sqlite3.connect(DB_PATH)
-    sql = "SELECT id, source_type, source_id, embedding, text_preview, created_at FROM embeddings"
-    params = []
-    if source_type:
-        sql += " WHERE source_type = ?"
-        params.append(source_type)
+    try:
+        sql = "SELECT id, source_type, source_id, embedding, text_preview, created_at FROM embeddings"
+        params = []
+        if source_type:
+            sql += " WHERE source_type = ?"
+            params.append(source_type)
 
-    rows = conn.execute(sql, params).fetchall()
-    conn.close()
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
 
     results = []
     for row in rows:
@@ -778,37 +807,38 @@ def semantic_search():
 def hybrid_search():
     """Hybrid search: FTS5 + semantic, combined ranking."""
     q = request.args.get("q", "")
-    limit = int(request.args.get("limit", "10"))
+    limit = safe_int(request.args.get("limit", "10"), default=10)
 
     if not q:
         return jsonify({"error": "query required"}), 400
 
     # FTS results
     conn = sqlite3.connect(DB_PATH)
-    fts_rows = conn.execute(
-        "SELECT c.id, c.content, c.role, c.channel, c.timestamp, COALESCE(c.importance, 0.4) FROM conversations c JOIN conversations_fts f ON c.id = f.rowid WHERE conversations_fts MATCH ? ORDER BY rank LIMIT ?",
-        [q, limit * 2]
-    ).fetchall()
+    try:
+        fts_rows = conn.execute(
+            "SELECT c.id, c.content, c.role, c.channel, c.timestamp, COALESCE(c.importance, 0.4) FROM conversations c JOIN conversations_fts f ON c.id = f.rowid WHERE conversations_fts MATCH ? ORDER BY rank LIMIT ?",
+            [q, limit * 2]
+        ).fetchall()
 
-    fts_results = {}
-    for i, row in enumerate(fts_rows):
-        fts_results[row[0]] = {"id": row[0], "content": row[1], "role": row[2], "channel": row[3], "timestamp": row[4], "importance": row[5], "fts_rank": i + 1}
+        fts_results = {}
+        for i, row in enumerate(fts_rows):
+            fts_results[row[0]] = {"id": row[0], "content": row[1], "role": row[2], "channel": row[3], "timestamp": row[4], "importance": row[5], "fts_rank": i + 1}
 
-    # Semantic results
-    query_emb = generate_embedding(q)
-    sem_results = {}
-    if query_emb:
-        emb_rows = conn.execute("SELECT source_id, embedding, text_preview FROM embeddings WHERE source_type = 'conversation'").fetchall()
-        scored = []
-        for row in emb_rows:
-            emb = unpack_embedding(row[1])
-            score = cosine_similarity(query_emb, emb)
-            scored.append((row[0], score, row[2]))
-        scored.sort(key=lambda x: x[1], reverse=True)
-        for i, (sid, score, preview) in enumerate(scored[:limit * 2]):
-            sem_results[sid] = {"source_id": sid, "score": score, "sem_rank": i + 1, "text_preview": preview}
-
-    conn.close()
+        # Semantic results
+        query_emb = generate_embedding(q)
+        sem_results = {}
+        if query_emb:
+            emb_rows = conn.execute("SELECT source_id, embedding, text_preview FROM embeddings WHERE source_type = 'conversation'").fetchall()
+            scored = []
+            for row in emb_rows:
+                emb = unpack_embedding(row[1])
+                score = cosine_similarity(query_emb, emb)
+                scored.append((row[0], score, row[2]))
+            scored.sort(key=lambda x: x[1], reverse=True)
+            for i, (sid, score, preview) in enumerate(scored[:limit * 2]):
+                sem_results[sid] = {"source_id": sid, "score": score, "sem_rank": i + 1, "text_preview": preview}
+    finally:
+        conn.close()
 
     # Combine: RRF (Reciprocal Rank Fusion) weighted by importance
     all_ids = set(fts_results.keys()) | set(sem_results.keys())
@@ -874,11 +904,8 @@ def embeddings_reindex():
     def _reindex():
         conn = sqlite3.connect(DB_PATH)
         conn.execute("CREATE TABLE IF NOT EXISTS embeddings (id INTEGER PRIMARY KEY AUTOINCREMENT, source_type TEXT, source_id INTEGER, embedding BLOB, text_preview TEXT, created_at TEXT)")
-        # Get existing indexed IDs
-        existing_conv = set(r[0] for r in conn.execute("SELECT source_id FROM embeddings WHERE source_type='conversation'").fetchall())
-        existing_mem = set(r[0] for r in conn.execute("SELECT source_id FROM embeddings WHERE source_type='memory'").fetchall())
         # Index missing conversations
-        rows = conn.execute("SELECT id, content FROM conversations WHERE id NOT IN ({})".format(",".join(str(i) for i in existing_conv) or "0")).fetchall()
+        rows = conn.execute("SELECT id, content FROM conversations WHERE id NOT IN (SELECT source_id FROM embeddings WHERE source_type=?)", ["conversation"]).fetchall()
         for row in rows:
             emb = generate_embedding(row[1])
             if emb:
@@ -886,7 +913,7 @@ def embeddings_reindex():
                              ["conversation", row[0], pack_embedding(emb), row[1][:200], now_iso()])
                 conn.commit()
         # Index missing memories
-        rows = conn.execute("SELECT id, name, description, content FROM memories WHERE id NOT IN ({})".format(",".join(str(i) for i in existing_mem) or "0")).fetchall()
+        rows = conn.execute("SELECT id, name, description, content FROM memories WHERE id NOT IN (SELECT source_id FROM embeddings WHERE source_type=?)", ["memory"]).fetchall()
         for row in rows:
             text = f"{row[1]} {row[2]} {row[3]}"
             emb = generate_embedding(text)
@@ -959,7 +986,7 @@ def reflection_create():
 @app.route("/reflection/recent")
 def reflection_recent():
     db = get_db()
-    limit = int(request.args.get("limit", "5"))
+    limit = safe_int(request.args.get("limit", "5"), default=5)
     rows = db.execute(
         "SELECT id, date, analysis, insights, actions, created_at FROM reflections ORDER BY created_at DESC LIMIT ?",
         [limit]
@@ -972,12 +999,21 @@ def reflection_recent():
 @app.route("/reflection/list")
 def reflection_list():
     db = get_db()
+    limit = safe_int(request.args.get("limit", "100"), default=100)
     rows = db.execute(
-        "SELECT id, date, analysis, insights, actions, created_at FROM reflections ORDER BY created_at DESC"
+        "SELECT id, date, analysis, insights, actions, created_at FROM reflections ORDER BY created_at DESC LIMIT ?",
+        [limit]
     ).fetchall()
     results = [{"id": r[0], "date": r[1], "analysis": r[2], "insights": r[3],
                 "actions": r[4], "created_at": r[5]} for r in rows]
     return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/reflection/<int:id>", methods=["DELETE"])
+def reflection_delete(id):
+    db = get_db()
+    db.execute("DELETE FROM reflections WHERE id = ?", [id])
+    return jsonify({"status": "deleted", "id": id})
 
 
 # -- Skills --
@@ -1019,12 +1055,21 @@ def skill_match():
 @app.route("/skill/list")
 def skill_list():
     db = get_db()
+    limit = safe_int(request.args.get("limit", "100"), default=100)
     rows = db.execute(
-        "SELECT id, name, trigger_pattern, description, steps, times_used, last_used, created_at FROM skills ORDER BY times_used DESC"
+        "SELECT id, name, trigger_pattern, description, steps, times_used, last_used, created_at FROM skills ORDER BY times_used DESC LIMIT ?",
+        [limit]
     ).fetchall()
     results = [{"id": r[0], "name": r[1], "trigger_pattern": r[2], "description": r[3],
                 "steps": r[4], "times_used": r[5], "last_used": r[6], "created_at": r[7]} for r in rows]
     return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/skill/<int:id>", methods=["DELETE"])
+def skill_delete(id):
+    db = get_db()
+    db.execute("DELETE FROM skills WHERE id = ?", [id])
+    return jsonify({"status": "deleted", "id": id})
 
 
 @app.route("/skill/<int:skill_id>/use", methods=["PUT"])
@@ -1046,7 +1091,7 @@ def preference_create():
         "rule": data.get("rule", ""),
         "source_count": data.get("source_count", 0),
         "source_ids": data.get("source_ids", ""),
-        "confidence": data.get("confidence", 0.5),
+        "confidence": clamp_float(data.get("confidence", 0.5)),
         "created_at": ts,
     }, pk="id")
     last_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -1056,12 +1101,21 @@ def preference_create():
 @app.route("/preference/list")
 def preference_list():
     db = get_db()
+    limit = safe_int(request.args.get("limit", "100"), default=100)
     rows = db.execute(
-        "SELECT id, rule, source_count, source_ids, confidence, created_at FROM preferences ORDER BY confidence DESC"
+        "SELECT id, rule, source_count, source_ids, confidence, created_at FROM preferences ORDER BY confidence DESC LIMIT ?",
+        [limit]
     ).fetchall()
     results = [{"id": r[0], "rule": r[1], "source_count": r[2], "source_ids": r[3],
                 "confidence": r[4], "created_at": r[5]} for r in rows]
     return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/preference/<int:id>", methods=["DELETE"])
+def preference_delete(id):
+    db = get_db()
+    db.execute("DELETE FROM preferences WHERE id = ?", [id])
+    return jsonify({"status": "deleted", "id": id})
 
 
 @app.route("/preference/active")
@@ -1086,7 +1140,7 @@ def insight_create():
         "type": data.get("type", ""),
         "pattern": data.get("pattern", ""),
         "evidence": data.get("evidence", ""),
-        "confidence": data.get("confidence", 0.5),
+        "confidence": clamp_float(data.get("confidence", 0.5)),
         "valid_until": data.get("valid_until"),
         "created_at": ts,
     }, pk="id")
@@ -1110,12 +1164,21 @@ def insight_active():
 @app.route("/insight/list")
 def insight_list():
     db = get_db()
+    limit = safe_int(request.args.get("limit", "100"), default=100)
     rows = db.execute(
-        "SELECT id, type, pattern, evidence, confidence, valid_until, created_at FROM insights ORDER BY created_at DESC"
+        "SELECT id, type, pattern, evidence, confidence, valid_until, created_at FROM insights ORDER BY created_at DESC LIMIT ?",
+        [limit]
     ).fetchall()
     results = [{"id": r[0], "type": r[1], "pattern": r[2], "evidence": r[3],
                 "confidence": r[4], "valid_until": r[5], "created_at": r[6]} for r in rows]
     return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/insight/<int:id>", methods=["DELETE"])
+def insight_delete(id):
+    db = get_db()
+    db.execute("DELETE FROM insights WHERE id = ?", [id])
+    return jsonify({"status": "deleted", "id": id})
 
 
 # -- Proposals --
@@ -1184,7 +1247,18 @@ def worldmodel_create():
 
     if existing:
         new_occ = existing[1] + 1
-        new_conf = min(0.99, existing[2] + 0.05)
+        # Decay-aware confidence: boost more if recently seen
+        try:
+            last_seen_dt = datetime.datetime.fromisoformat(
+                db.execute("SELECT last_seen FROM world_model WHERE id = ?", [existing[0]]).fetchone()[0]
+            )
+            days_since = (datetime.datetime.now(datetime.timezone.utc) - last_seen_dt).days
+        except Exception:
+            days_since = 30
+        if days_since < 7:
+            new_conf = min(0.99, existing[2] + 0.03)
+        else:
+            new_conf = min(0.99, existing[2] + 0.01)
         db.execute(
             "UPDATE world_model SET occurrences = ?, confidence = ?, last_seen = ?, updated_at = ?, evidence = COALESCE(?, evidence), expires_at = COALESCE(?, expires_at) WHERE id = ?",
             [new_occ, new_conf, ts, ts, data.get("evidence"), data.get("expires_at"), existing[0]]
@@ -1195,7 +1269,7 @@ def worldmodel_create():
         "category": category,
         "pattern": pattern,
         "evidence": data.get("evidence", ""),
-        "confidence": data.get("confidence", 0.5),
+        "confidence": clamp_float(data.get("confidence", 0.5)),
         "occurrences": 1,
         "first_seen": ts,
         "last_seen": ts,
@@ -1227,14 +1301,16 @@ def worldmodel_list():
     """List all world model entries."""
     db = get_db()
     category = request.args.get("category", "")
+    limit = safe_int(request.args.get("limit", "100"), default=100)
     if category:
         rows = db.execute(
-            "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at FROM world_model WHERE category = ? ORDER BY confidence DESC",
-            [category]
+            "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at FROM world_model WHERE category = ? ORDER BY confidence DESC LIMIT ?",
+            [category, limit]
         ).fetchall()
     else:
         rows = db.execute(
-            "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at FROM world_model ORDER BY category, confidence DESC"
+            "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at FROM world_model ORDER BY category, confidence DESC LIMIT ?",
+            [limit]
         ).fetchall()
     results = [{"id": r[0], "category": r[1], "pattern": r[2], "evidence": r[3],
                 "confidence": r[4], "occurrences": r[5], "first_seen": r[6],
@@ -1269,18 +1345,20 @@ def keywords_create():
     db = get_db()
     data = request.json or {}
     keyword = data.get("keyword", "").lower().strip()
-    score = float(data.get("score", 0.6))
+    score = clamp_float(data.get("score", 0.6), default=0.6)
     ts = now_iso()
     existing = db.execute("SELECT id FROM importance_keywords WHERE keyword = ?", [keyword]).fetchone()
     if existing:
         db.execute("UPDATE importance_keywords SET score = ?, updated_at = ? WHERE keyword = ?", [score, ts, keyword])
-        global _keywords_cache_ts
-        _keywords_cache_ts = 0  # invalidate cache
+        with _keywords_lock:
+            global _keywords_cache_ts
+            _keywords_cache_ts = 0  # invalidate cache
         return jsonify({"status": "updated", "keyword": keyword, "score": score})
     db.execute(
         "INSERT INTO importance_keywords (keyword, score, hits, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
         [keyword, score, ts, ts])
-    _keywords_cache_ts = 0
+    with _keywords_lock:
+        _keywords_cache_ts = 0
     return jsonify({"status": "created", "keyword": keyword, "score": score})
 
 
@@ -1288,8 +1366,9 @@ def keywords_create():
 def keywords_delete(kw_id):
     db = get_db()
     db.execute("DELETE FROM importance_keywords WHERE id = ?", [kw_id])
-    global _keywords_cache_ts
-    _keywords_cache_ts = 0
+    with _keywords_lock:
+        global _keywords_cache_ts
+        _keywords_cache_ts = 0
     return jsonify({"status": "deleted", "id": kw_id})
 
 
