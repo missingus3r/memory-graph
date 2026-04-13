@@ -42,7 +42,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -131,6 +131,11 @@ def init_db():
             file_path TEXT, change_type TEXT, description TEXT, diff_preview TEXT,
             status TEXT DEFAULT 'pending', created_at TEXT, resolved_at TEXT
         )""",
+        """CREATE TABLE IF NOT EXISTS importance_keywords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT UNIQUE, score REAL, hits INTEGER DEFAULT 0,
+            created_at TEXT, updated_at TEXT
+        )""",
         """CREATE TABLE IF NOT EXISTS world_model (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             category TEXT, pattern TEXT, evidence TEXT,
@@ -153,20 +158,79 @@ def now_iso():
 
 # ── Importance classification ──
 _URL_RE = re.compile(r"https?://")
+_keywords_cache = {}
+_keywords_cache_ts = 0
+
+_DEFAULT_KEYWORDS = {
+    "nota ": 1.0, "nota:": 1.0, "save": 1.0, "guarda": 1.0,
+    "remember": 1.0, "recorda": 1.0, "recordar": 1.0, "importante": 1.0,
+    "proyecto": 0.8, "project": 0.8, "compra": 0.8, "pagina": 0.8,
+    "deploy": 0.8, "push": 0.8, "pushear": 0.8, "commit": 0.8, "notion": 0.8,
+    "busca": 0.6, "search": 0.6, "investiga": 0.6, "agrega": 0.6, "crea": 0.6,
+}
+
+
+def _seed_keywords():
+    """Seed importance_keywords table with defaults if empty."""
+    conn = sqlite3.connect(DB_PATH)
+    count = conn.execute("SELECT COUNT(*) FROM importance_keywords").fetchone()[0]
+    if count == 0:
+        ts = now_iso()
+        for kw, score in _DEFAULT_KEYWORDS.items():
+            conn.execute(
+                "INSERT OR IGNORE INTO importance_keywords (keyword, score, hits, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+                [kw, score, ts, ts])
+        conn.commit()
+    conn.close()
+
+
+def _load_keywords():
+    """Load keywords from DB with a 60s cache."""
+    global _keywords_cache, _keywords_cache_ts
+    import time
+    now = time.time()
+    if _keywords_cache and (now - _keywords_cache_ts) < 60:
+        return _keywords_cache
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT keyword, score FROM importance_keywords ORDER BY score DESC").fetchall()
+        conn.close()
+        _keywords_cache = {r[0]: r[1] for r in rows}
+        _keywords_cache_ts = now
+    except Exception:
+        _keywords_cache = _DEFAULT_KEYWORDS
+    return _keywords_cache
+
 
 def classify_importance(role, content):
-    """Classify message importance (0.0-1.0) based on role and content keywords."""
+    """Classify message importance (0.0-1.0) based on dynamic keywords from DB."""
     lower = content.lower()
+    keywords = _load_keywords()
 
-    # Critical (1.0)
-    if any(kw in lower for kw in ["nota ", "nota:", "save", "guarda", "remember", "recorda", "recordar", "importante"]):
-        return 1.0
-    # High (0.8)
-    if any(kw in lower for kw in ["proyecto", "project", "compra", "pagina", "deploy", "push", "pushear", "commit", "notion"]):
-        return 0.8
-    # Medium (0.6)
-    if _URL_RE.search(lower) or any(kw in lower for kw in ["busca", "search", "investiga", "agrega", "crea"]):
+    # Check keywords by score (highest first, dict is ordered by score DESC)
+    best_score = 0.0
+    matched_kw = None
+    for kw, score in keywords.items():
+        if kw in lower and score > best_score:
+            best_score = score
+            matched_kw = kw
+
+    if matched_kw:
+        # Track hit count asynchronously
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("UPDATE importance_keywords SET hits = hits + 1, updated_at = ? WHERE keyword = ?",
+                         [now_iso(), matched_kw])
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        return best_score
+
+    # URL detection (medium)
+    if _URL_RE.search(lower):
         return 0.6
+
     # Role-based defaults
     if role == "system":
         return 0.1
@@ -1185,7 +1249,52 @@ def worldmodel_delete(entry_id):
     return jsonify({"status": "deleted", "id": entry_id})
 
 
+# -- Importance Keywords (dynamic) --
+
+@app.route("/keywords", methods=["GET"])
+def keywords_list():
+    """List all importance keywords with scores and hit counts."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, keyword, score, hits, created_at, updated_at FROM importance_keywords ORDER BY score DESC, hits DESC"
+    ).fetchall()
+    results = [{"id": r[0], "keyword": r[1], "score": r[2], "hits": r[3],
+                "created_at": r[4], "updated_at": r[5]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/keywords", methods=["POST"])
+def keywords_create():
+    """Add or update a keyword. {keyword, score}"""
+    db = get_db()
+    data = request.json or {}
+    keyword = data.get("keyword", "").lower().strip()
+    score = float(data.get("score", 0.6))
+    ts = now_iso()
+    existing = db.execute("SELECT id FROM importance_keywords WHERE keyword = ?", [keyword]).fetchone()
+    if existing:
+        db.execute("UPDATE importance_keywords SET score = ?, updated_at = ? WHERE keyword = ?", [score, ts, keyword])
+        global _keywords_cache_ts
+        _keywords_cache_ts = 0  # invalidate cache
+        return jsonify({"status": "updated", "keyword": keyword, "score": score})
+    db.execute(
+        "INSERT INTO importance_keywords (keyword, score, hits, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+        [keyword, score, ts, ts])
+    _keywords_cache_ts = 0
+    return jsonify({"status": "created", "keyword": keyword, "score": score})
+
+
+@app.route("/keywords/<int:kw_id>", methods=["DELETE"])
+def keywords_delete(kw_id):
+    db = get_db()
+    db.execute("DELETE FROM importance_keywords WHERE id = ?", [kw_id])
+    global _keywords_cache_ts
+    _keywords_cache_ts = 0
+    return jsonify({"status": "deleted", "id": kw_id})
+
+
 if __name__ == "__main__":
     init_db()
     init_embeddings_table()
+    _seed_keywords()
     app.run(host="0.0.0.0", port=PORT)
