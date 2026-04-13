@@ -134,6 +134,7 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <button class="tab-btn" data-tab="logs">Logs</button>
     <button class="tab-btn" data-tab="arch">Arch</button>
     <button class="tab-btn" data-tab="rag">RAG</button>
+    <button class="tab-btn" data-tab="brain">Brain</button>
   </div>
   <div class="stats">
     <span>Nodos: <b id="nodeCount">0</b></span>
@@ -199,6 +200,7 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <div id="ragResults"></div>
   </div>
 </div>
+<div id="brainPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px"></div>
 <div class="arch-modal-overlay" id="archOverlay" onclick="closeArchModal()"></div>
 <div class="arch-modal" id="archModal">
   <button class="arch-modal-close" onclick="closeArchModal()">&times;</button>
@@ -629,7 +631,8 @@ function switchTab(tab) {
   document.getElementById('logsPanel').style.display = tab === 'logs' ? 'block' : 'none';
   document.getElementById('archPanel').style.display = tab === 'arch' ? 'block' : 'none';
   document.getElementById('ragPanel').style.display = tab === 'rag' ? 'block' : 'none';
-  document.body.style.overflow = (tab === 'logs' || tab === 'rag') ? 'auto' : 'hidden';
+  document.getElementById('brainPanel').style.display = tab === 'brain' ? 'block' : 'none';
+  document.body.style.overflow = (tab === 'logs' || tab === 'rag' || tab === 'brain') ? 'auto' : 'hidden';
 
   document.querySelector('.filters').style.display = tab === 'graph' ? 'flex' : 'none';
   document.querySelector('.legend').style.display = tab === 'graph' ? 'flex' : 'none';
@@ -637,6 +640,7 @@ function switchTab(tab) {
   if (tab === 'logs') renderLogs();
   if (tab === 'arch') renderArch();
   if (tab === 'rag') loadRagDashboard();
+  if (tab === 'brain') renderBrain();
 }
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -646,7 +650,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // Restore tab from hash (deferred to ensure all data is defined)
 window.addEventListener('hashchange', () => {
   const h = location.hash.replace('#','');
-  if (['logs','graph','arch','rag'].includes(h)) switchTab(h);
+  if (['logs','graph','arch','rag','brain'].includes(h)) switchTab(h);
 });
 
 function getCollapsedStates() {
@@ -737,6 +741,13 @@ var ARCH_NODES = [
   {id:'embeddings', name:'Embeddings', type:'storage', status:'online', details:'Tabla embeddings en SQLite. 800+ vectores 3072-dim. Gemini Embedding 001 free tier.'},
   {id:'gemini-embed', name:'Gemini Embed', type:'data', status:'online', details:'Gemini Embedding 001. 3072 dimensiones. Free tier (60 req/min). Genera embeddings para RAG.'},
   {id:'rag-search', name:'RAG Search', type:'service', status:'online', details:'Búsqueda semántica + híbrida. Endpoints: /search/semantic, /search/hybrid. Cosine similarity + RRF.'},
+  {id:'reflections', name:'Reflections', type:'data', status:'online', details:'Daily self-evaluation, insights, actions'},
+  {id:'skills', name:'Skills DB', type:'data', status:'online', details:'Learned task patterns, trigger matching'},
+  {id:'preferences', name:'Preferences', type:'data', status:'online', details:'Auto-inferred user rules (confidence scored)'},
+  {id:'insights', name:'World Model', type:'data', status:'online', details:'Temporal/behavioral patterns, correlations'},
+  {id:'proposals', name:'Proposals', type:'cron', status:'idle', details:'Self-modification with approval flow'},
+  {id:'reflection-cron', name:'Daily Reflection', type:'cron', status:'online', details:'23:27 — Self-evaluation + world model analysis'},
+  {id:'preference-cron', name:'Preference Learning', type:'cron', status:'online', details:'Weekly — Infer rules from feedback patterns'},
 ];
 
 var ARCH_LINKS = [
@@ -769,6 +780,17 @@ var ARCH_LINKS = [
   {source:'memory-api', target:'gemini-embed', type:'data', label:'generate'},
   {source:'gemini-embed', target:'embeddings', type:'data', label:'store vectors'},
   {source:'telegram-bot', target:'claude-code', type:'data', label:'user messages'},
+  {source:'memory-api', target:'reflections', type:'data', label:'stores'},
+  {source:'memory-api', target:'skills', type:'data', label:'stores'},
+  {source:'memory-api', target:'preferences', type:'data', label:'stores'},
+  {source:'memory-api', target:'insights', type:'data', label:'stores'},
+  {source:'memory-api', target:'proposals', type:'data', label:'stores'},
+  {source:'reflection-cron', target:'reflections', type:'control', label:'generates'},
+  {source:'reflection-cron', target:'insights', type:'control', label:'generates'},
+  {source:'preference-cron', target:'preferences', type:'control', label:'infers'},
+  {source:'preference-cron', target:'proposals', type:'control', label:'creates'},
+  {source:'claude-code', target:'skills', type:'control', label:'learns/uses'},
+  {source:'claude-code', target:'proposals', type:'control', label:'proposes'},
 ];
 
 var ARCH_COLORS = {core:'#ff6b6b', service:'#60a5fa', data:'#34d399', cron:'#fbbf24', project:'#c084fc', storage:'#fb923c'};
@@ -1107,9 +1129,172 @@ function doReindex() {
   });
 }
 
+// === Brain Dashboard ===
+async function renderBrain() {
+  const panel = document.getElementById('brainPanel');
+  panel.innerHTML = '<div style="max-width:1000px;margin:0 auto;padding:20px;color:#64748b;font-size:13px">Loading brain data...</div>';
+
+  const [skills, preferences, reflections, insights, proposals] = await Promise.all([
+    fetch(API+'/skill/list').then(r=>r.json()).catch(()=>({results:[]})),
+    fetch(API+'/preference/list').then(r=>r.json()).catch(()=>({results:[]})),
+    fetch(API+'/reflection/list').then(r=>r.json()).catch(()=>({results:[]})),
+    fetch(API+'/insight/active').then(r=>r.json()).catch(()=>({results:[]})),
+    fetch(API+'/proposal/pending').then(r=>r.json()).catch(()=>({results:[]}))
+  ]);
+
+  const sk = skills.results || skills || [];
+  const pr = preferences.results || preferences || [];
+  const rf = reflections.results || reflections || [];
+  const ins = insights.results || insights || [];
+  const prop = proposals.results || proposals || [];
+
+  const cardStyle = (color) => `background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-left:3px solid ${color};border-radius:12px;padding:16px 20px;margin-bottom:12px`;
+  const sectionStyle = 'margin-bottom:32px';
+  const titleStyle = (color) => `font-size:16px;font-weight:700;color:${color};margin-bottom:14px;display:flex;align-items:center;gap:8px`;
+  const countBadge = (n, color) => `<span style="font-size:11px;font-weight:600;background:${color}22;color:${color};padding:2px 8px;border-radius:8px">${n}</span>`;
+  const emptyMsg = (msg) => `<div style="color:#475569;font-size:13px;padding:12px 0;font-style:italic">${msg}</div>`;
+
+  let html = '<div style="max-width:1000px;margin:0 auto;padding:20px">';
+
+  // Section 1: Skills
+  html += `<div style="${sectionStyle}">`;
+  html += `<div style="${titleStyle('#22c55e')}">Learned Skills ${countBadge(sk.length, '#22c55e')}</div>`;
+  if (sk.length === 0) {
+    html += emptyMsg('No skills learned yet');
+  } else {
+    sk.forEach(s => {
+      const used = s.times_used || 0;
+      html += `<div style="${cardStyle('#22c55e')}">
+        <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px">${(s.name||'Unnamed skill').replace(/</g,'&lt;')}</div>
+        ${s.trigger_pattern ? '<div style="font-family:monospace;font-size:11px;color:#64748b;margin-bottom:4px">' + s.trigger_pattern.replace(/</g,'&lt;') + '</div>' : ''}
+        ${s.description ? '<div style="color:#94a3b8;font-size:13px;margin-bottom:6px">' + s.description.replace(/</g,'&lt;') + '</div>' : ''}
+        <span style="font-size:10px;font-weight:600;background:rgba(34,197,94,0.1);color:#22c55e;padding:2px 8px;border-radius:6px">Used ${used}x</span>
+      </div>`;
+    });
+  }
+  html += '</div>';
+
+  // Section 2: Preferences
+  html += `<div style="${sectionStyle}">`;
+  html += `<div style="${titleStyle('#22d3ee')}">Active Preferences ${countBadge(pr.length, '#22d3ee')}</div>`;
+  if (pr.length === 0) {
+    html += emptyMsg('No preferences inferred yet');
+  } else {
+    pr.forEach(p => {
+      const conf = p.confidence || 0;
+      const pct = Math.round(conf * 100);
+      const barColor = conf > 0.7 ? '#22d3ee' : conf > 0.4 ? '#fbbf24' : '#64748b';
+      html += `<div style="${cardStyle('#22d3ee')}">
+        <div style="color:#e2e8f0;font-size:13px;margin-bottom:8px">${(p.rule || p.key || p.value || 'Unknown').replace(/</g,'&lt;')}</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="flex:1;height:6px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden">
+            <div style="width:${pct}%;height:100%;background:${barColor};border-radius:3px"></div>
+          </div>
+          <span style="font-size:11px;color:${barColor};font-weight:600">${pct}%</span>
+        </div>
+      </div>`;
+    });
+  }
+  html += '</div>';
+
+  // Section 3: Reflections
+  html += `<div style="${sectionStyle}">`;
+  html += `<div style="${titleStyle('#eab308')}">Daily Reflections ${countBadge(rf.length, '#eab308')}</div>`;
+  if (rf.length === 0) {
+    html += emptyMsg('No reflections yet');
+  } else {
+    const showAll = rf.length <= 5;
+    const visible = showAll ? rf : rf.slice(0, 5);
+    visible.forEach((r, i) => {
+      const date = r.created_at ? new Date(r.created_at).toLocaleDateString('es-UY', {weekday:'short', year:'numeric', month:'short', day:'numeric'}) : 'Unknown date';
+      const rid = 'refl_toggle_' + i;
+      html += `<div style="${cardStyle('#eab308')}">
+        <div onclick="(function(){var b=document.getElementById('${rid}');b.style.display=b.style.display==='none'?'block':'none'})()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">
+          <span style="font-weight:600;color:#eab308;font-size:13px">${date}</span>
+          <span style="color:#64748b;font-size:10px">click to expand</span>
+        </div>
+        <div id="${rid}" style="display:none;margin-top:10px;color:#94a3b8;font-size:13px;line-height:1.7">
+          ${r.summary ? '<div style="margin-bottom:6px"><b style="color:#e2e8f0">Analysis:</b> ' + (r.summary||'').replace(/</g,'&lt;') + '</div>' : ''}
+          ${r.content ? '<div style="margin-bottom:6px">' + (r.content||'').replace(/</g,'&lt;').replace(/\n/g,'<br>') + '</div>' : ''}
+          ${r.insights ? '<div style="margin-bottom:6px"><b style="color:#e2e8f0">Insights:</b> ' + (typeof r.insights === 'string' ? r.insights.replace(/</g,'&lt;') : JSON.stringify(r.insights)) + '</div>' : ''}
+          ${r.actions ? '<div><b style="color:#e2e8f0">Actions:</b> ' + (typeof r.actions === 'string' ? r.actions.replace(/</g,'&lt;') : JSON.stringify(r.actions)) + '</div>' : ''}
+        </div>
+      </div>`;
+    });
+    if (!showAll) {
+      html += `<div id="refl_show_all" style="text-align:center;padding:8px">
+        <button onclick="(function(){document.getElementById('refl_hidden').style.display='block';document.getElementById('refl_show_all').style.display='none'})()" style="background:rgba(234,179,8,0.1);border:1px solid rgba(234,179,8,0.3);color:#eab308;padding:6px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Show all ${rf.length} reflections</button>
+      </div>`;
+      html += `<div id="refl_hidden" style="display:none">`;
+      rf.slice(5).forEach((r, i) => {
+        const date = r.created_at ? new Date(r.created_at).toLocaleDateString('es-UY', {weekday:'short', year:'numeric', month:'short', day:'numeric'}) : 'Unknown date';
+        const rid = 'refl_toggle_h' + i;
+        html += `<div style="${cardStyle('#eab308')}">
+          <div onclick="(function(){var b=document.getElementById('${rid}');b.style.display=b.style.display==='none'?'block':'none'})()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">
+            <span style="font-weight:600;color:#eab308;font-size:13px">${date}</span>
+            <span style="color:#64748b;font-size:10px">click to expand</span>
+          </div>
+          <div id="${rid}" style="display:none;margin-top:10px;color:#94a3b8;font-size:13px;line-height:1.7">
+            ${r.summary ? '<div style="margin-bottom:6px"><b style="color:#e2e8f0">Analysis:</b> ' + (r.summary||'').replace(/</g,'&lt;') + '</div>' : ''}
+            ${r.content ? '<div style="margin-bottom:6px">' + (r.content||'').replace(/</g,'&lt;').replace(/\n/g,'<br>') + '</div>' : ''}
+            ${r.insights ? '<div style="margin-bottom:6px"><b style="color:#e2e8f0">Insights:</b> ' + (typeof r.insights === 'string' ? r.insights.replace(/</g,'&lt;') : JSON.stringify(r.insights)) + '</div>' : ''}
+            ${r.actions ? '<div><b style="color:#e2e8f0">Actions:</b> ' + (typeof r.actions === 'string' ? r.actions.replace(/</g,'&lt;') : JSON.stringify(r.actions)) + '</div>' : ''}
+          </div>
+        </div>`;
+      });
+      html += '</div>';
+    }
+  }
+  html += '</div>';
+
+  // Section 4: World Model / Insights
+  html += `<div style="${sectionStyle}">`;
+  html += `<div style="${titleStyle('#a855f7')}">World Model ${countBadge(ins.length, '#a855f7')}</div>`;
+  if (ins.length === 0) {
+    html += emptyMsg('No patterns detected yet');
+  } else {
+    ins.forEach(i => {
+      const conf = i.confidence || 0;
+      const pct = Math.round(conf * 100);
+      const confColor = conf > 0.7 ? '#34d399' : conf > 0.4 ? '#fbbf24' : '#64748b';
+      html += `<div style="${cardStyle('#a855f7')}">
+        <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px">${(i.pattern || i.content || 'Unknown pattern').replace(/</g,'&lt;')}</div>
+        ${i.evidence ? '<div style="color:#64748b;font-size:12px;margin-bottom:6px">' + (typeof i.evidence === 'string' ? i.evidence.replace(/</g,'&lt;') : JSON.stringify(i.evidence)) + '</div>' : ''}
+        <span style="font-size:10px;font-weight:600;background:${confColor}22;color:${confColor};padding:2px 8px;border-radius:6px">${pct}% confidence</span>
+      </div>`;
+    });
+  }
+  html += '</div>';
+
+  // Section 5: Proposals
+  html += `<div style="${sectionStyle}">`;
+  html += `<div style="${titleStyle('#f97316')}">Self-Improvement Proposals ${countBadge(prop.length, '#f97316')}</div>`;
+  if (prop.length === 0) {
+    html += emptyMsg('No proposals pending');
+  } else {
+    prop.forEach(p => {
+      const status = p.status || 'pending';
+      const statusColors = {pending:'#f97316', approved:'#34d399', rejected:'#ef4444'};
+      const sc = statusColors[status] || '#64748b';
+      html += `<div style="${cardStyle('#f97316')}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <div style="font-weight:700;color:#e2e8f0">${(p.description || p.title || 'Untitled').replace(/</g,'&lt;')}</div>
+          <span style="font-size:10px;font-weight:600;background:${sc}22;color:${sc};padding:2px 8px;border-radius:6px">${status}</span>
+        </div>
+        ${p.file_path ? '<div style="font-family:monospace;font-size:11px;color:#64748b;margin-bottom:6px">' + p.file_path.replace(/</g,'&lt;') + '</div>' : ''}
+        ${p.diff ? '<pre style="background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px 12px;font-size:11px;color:#94a3b8;overflow-x:auto;margin:0;line-height:1.5">' + p.diff.replace(/</g,'&lt;') + '</pre>' : ''}
+      </div>`;
+    });
+  }
+  html += '</div>';
+
+  html += '</div>';
+  panel.innerHTML = html;
+}
+
 // Restore tab from hash (after all data is defined)
 const hashTab = location.hash.replace('#','');
-if (['logs','graph','arch','rag'].includes(hashTab)) switchTab(hashTab);
+if (['logs','graph','arch','rag','brain'].includes(hashTab)) switchTab(hashTab);
 </script>
 </body>
 </html>
