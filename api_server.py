@@ -42,7 +42,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -319,7 +319,7 @@ def embed_async(source_type, source_id, text):
         if emb:
             conn = sqlite3.connect(DB_PATH)
             conn.execute("CREATE TABLE IF NOT EXISTS embeddings (id INTEGER PRIMARY KEY AUTOINCREMENT, source_type TEXT, source_id INTEGER, embedding BLOB, text_preview TEXT, created_at TEXT)")
-            conn.execute("INSERT INTO embeddings (source_type, source_id, embedding, text_preview, created_at) VALUES (?, ?, ?, ?, ?)",
+            conn.execute("INSERT OR REPLACE INTO embeddings (source_type, source_id, embedding, text_preview, created_at) VALUES (?, ?, ?, ?, ?)",
                          [source_type, source_id, pack_embedding(emb), text[:200], now_iso()])
             conn.commit()
             conn.close()
@@ -331,6 +331,7 @@ def init_embeddings_table():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("CREATE TABLE IF NOT EXISTS embeddings (id INTEGER PRIMARY KEY AUTOINCREMENT, source_type TEXT, source_id INTEGER, embedding BLOB, text_preview TEXT, created_at TEXT)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_emb_source ON embeddings (source_type, source_id)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_type, source_id)")
     conn.commit()
     conn.close()
 
@@ -525,8 +526,8 @@ def conversation_stats():
     high = db.execute("SELECT COUNT(*) FROM conversations WHERE COALESCE(importance, 0.4) >= 0.7").fetchone()[0]
 
     # Timestamps
-    oldest = db.execute("SELECT MIN(timestamp) FROM conversations").fetchone()[0]
-    newest = db.execute("SELECT MAX(timestamp) FROM conversations").fetchone()[0]
+    oldest = db.execute("SELECT COALESCE(MIN(timestamp), '') FROM conversations").fetchone()[0]
+    newest = db.execute("SELECT COALESCE(MAX(timestamp), '') FROM conversations").fetchone()[0]
 
     # Summaries
     summaries = by_role.get("summary", 0)
@@ -939,7 +940,7 @@ def embeddings_reindex():
         for row in rows:
             emb = generate_embedding(row[1])
             if emb:
-                conn.execute("INSERT INTO embeddings (source_type, source_id, embedding, text_preview, created_at) VALUES (?, ?, ?, ?, ?)",
+                conn.execute("INSERT OR REPLACE INTO embeddings (source_type, source_id, embedding, text_preview, created_at) VALUES (?, ?, ?, ?, ?)",
                              ["conversation", row[0], pack_embedding(emb), row[1][:200], now_iso()])
                 conn.commit()
         # Index missing memories
@@ -948,7 +949,7 @@ def embeddings_reindex():
             text = f"{row[1]} {row[2]} {row[3]}"
             emb = generate_embedding(text)
             if emb:
-                conn.execute("INSERT INTO embeddings (source_type, source_id, embedding, text_preview, created_at) VALUES (?, ?, ?, ?, ?)",
+                conn.execute("INSERT OR REPLACE INTO embeddings (source_type, source_id, embedding, text_preview, created_at) VALUES (?, ?, ?, ?, ?)",
                              ["memory", row[0], pack_embedding(emb), text[:200], now_iso()])
                 conn.commit()
         conn.close()
@@ -989,7 +990,10 @@ def key_value(key):
     else:
         row = conn.execute("SELECT value FROM kv WHERE key = ?", [key]).fetchone()
         if row:
-            return jsonify(json.loads(row[0]))
+            try:
+                return jsonify(json.loads(row[0]))
+            except (json.JSONDecodeError, TypeError):
+                return jsonify({"value": row[0]})
         return jsonify({})
 
 

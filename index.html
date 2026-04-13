@@ -548,7 +548,7 @@ function buildGraph(conversations, memories, reflections, skills, preferences, i
 async function fetchData() {
   try {
     const [convRes, memRes, reflRes, skillRes, prefRes, insightRes, proposalRes] = await Promise.all([
-      fetch(API+'/conversation/recent?limit=99999').then(r=>r.json()),
+      fetch(API+'/conversation/recent?limit=1000').then(r=>r.json()),
       fetch(API+'/memory/list').then(r=>r.json()),
       fetch(API+'/reflection/list').then(r=>r.json()).catch(()=>[]),
       fetch(API+'/skill/list').then(r=>r.json()).catch(()=>[]),
@@ -1337,12 +1337,12 @@ async function renderBrain() {
   } else {
     const byScore = {};
     kws.forEach(k => { const s = k.score; if (!byScore[s]) byScore[s] = []; byScore[s].push(k); });
-    const scoreLabels = {1:'Critical (1.0)', 0.8:'High (0.8)', 0.6:'Medium (0.6)'};
-    const scoreColors = {1:'#ef4444', 0.8:'#f97316', 0.6:'#eab308'};
+    const scoreLabels = {'1':'Critical (1.0)', '0.8':'High (0.8)', '0.6':'Medium (0.6)'};
+    const scoreColors = {'1':'#ef4444', '0.8':'#f97316', '0.6':'#eab308'};
     Object.entries(byScore).sort((a,b) => b[0]-a[0]).forEach(([score, items]) => {
       const sc = parseFloat(score);
-      const label = scoreLabels[sc] || `Score ${sc}`;
-      const color = scoreColors[sc] || '#64748b';
+      const label = scoreLabels[String(sc)] || `Score ${sc}`;
+      const color = scoreColors[String(sc)] || '#64748b';
       html += `<div style="margin-bottom:12px">`;
       html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}</div>`;
       html += `<div style="display:flex;flex-wrap:wrap;gap:6px">`;
