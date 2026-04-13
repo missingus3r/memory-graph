@@ -42,7 +42,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -236,15 +236,16 @@ def classify_importance(role, content):
             matched_kw = kw
 
     if matched_kw:
-        # Track hit count asynchronously
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            conn.execute("UPDATE importance_keywords SET hits = hits + 1, updated_at = ? WHERE keyword = ?",
-                         [now_iso(), matched_kw])
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
+        # Track hit count with thread-safe lock
+        with _keywords_lock:
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("UPDATE importance_keywords SET hits = hits + 1, updated_at = ? WHERE keyword = ?",
+                             [now_iso(), matched_kw])
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
         return best_score
 
     # URL detection (medium)
@@ -450,7 +451,7 @@ def conversation_summarize():
     ).fetchall()
 
     if not rows:
-        return jsonify({"status": "nothing to summarize", "summaries_created": 0})
+        return jsonify({"status": "ok", "message": "nothing to summarize", "summaries_created": 0})
 
     # Group by ISO week (YYYY-WNN)
     by_week = {}
@@ -740,9 +741,22 @@ def entity_search():
     return jsonify({"count": len(results), "results": results})
 
 
+@app.route("/entity/<int:entity_id>", methods=["GET"])
+def entity_get(entity_id):
+    db = get_db()
+    rows = db.execute("SELECT id, name, type, details, created_at, updated_at FROM entities WHERE id = ?", [entity_id]).fetchall()
+    if not rows:
+        return jsonify({"error": "Entity not found"}), 404
+    r = rows[0]
+    return jsonify({"id": r[0], "name": r[1], "type": r[2], "details": r[3], "created_at": r[4], "updated_at": r[5]})
+
+
 @app.route("/entity/<int:id>", methods=["DELETE"])
 def entity_delete(id):
     db = get_db()
+    existing = db.execute("SELECT id FROM entities WHERE id = ?", [id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Entity {id} not found"}), 404
     db.execute("DELETE FROM entities WHERE id = ?", [id])
     return jsonify({"status": "deleted", "id": id})
 
@@ -785,6 +799,7 @@ def semantic_search():
         if source_type:
             sql += " WHERE source_type = ?"
             params.append(source_type)
+        sql += " ORDER BY rowid DESC LIMIT 5000"
 
         rows = conn.execute(sql, params).fetchall()
     finally:
@@ -824,11 +839,26 @@ def hybrid_search():
         for i, row in enumerate(fts_rows):
             fts_results[row[0]] = {"id": row[0], "content": row[1], "role": row[2], "channel": row[3], "timestamp": row[4], "importance": row[5], "fts_rank": i + 1}
 
-        # Semantic results
+        # Semantic results — pre-filter to FTS candidate IDs + LIMIT 5000 fallback
         query_emb = generate_embedding(q)
         sem_results = {}
         if query_emb:
-            emb_rows = conn.execute("SELECT source_id, embedding, text_preview FROM embeddings WHERE source_type = 'conversation'").fetchall()
+            fts_ids = list(fts_results.keys())
+            if fts_ids:
+                placeholders = ",".join("?" for _ in fts_ids)
+                emb_rows = conn.execute(
+                    f"SELECT source_id, embedding, text_preview FROM embeddings WHERE source_type = 'conversation' AND source_id IN ({placeholders})",
+                    fts_ids
+                ).fetchall()
+                # Also load recent embeddings not in FTS results as fallback
+                emb_rows += conn.execute(
+                    f"SELECT source_id, embedding, text_preview FROM embeddings WHERE source_type = 'conversation' AND source_id NOT IN ({placeholders}) ORDER BY rowid DESC LIMIT 5000",
+                    fts_ids
+                ).fetchall()
+            else:
+                emb_rows = conn.execute(
+                    "SELECT source_id, embedding, text_preview FROM embeddings WHERE source_type = 'conversation' ORDER BY rowid DESC LIMIT 5000"
+                ).fetchall()
             scored = []
             for row in emb_rows:
                 emb = unpack_embedding(row[1])
@@ -924,7 +954,7 @@ def embeddings_reindex():
         conn.close()
 
     threading.Thread(target=_reindex, daemon=True).start()
-    return jsonify({"status": "reindexing started"})
+    return jsonify({"status": "ok", "message": "reindexing started"})
 
 
 @app.route("/health")
@@ -942,7 +972,7 @@ def graph():
     graph_path = Path.home() / "proyectos" / "memory-graph" / "index.html"
     if graph_path.exists():
         return send_file(str(graph_path))
-    return "Graph not found", 404
+    return jsonify({"error": "Graph not found"}), 404
 
 
 @app.route("/kv/<key>", methods=["GET", "PUT"])
@@ -1009,9 +1039,22 @@ def reflection_list():
     return jsonify({"count": len(results), "results": results})
 
 
+@app.route("/reflection/<int:reflection_id>", methods=["GET"])
+def reflection_get(reflection_id):
+    db = get_db()
+    rows = db.execute("SELECT id, date, analysis, insights, actions, created_at FROM reflections WHERE id = ?", [reflection_id]).fetchall()
+    if not rows:
+        return jsonify({"error": "Reflection not found"}), 404
+    r = rows[0]
+    return jsonify({"id": r[0], "date": r[1], "analysis": r[2], "insights": r[3], "actions": r[4], "created_at": r[5]})
+
+
 @app.route("/reflection/<int:id>", methods=["DELETE"])
 def reflection_delete(id):
     db = get_db()
+    existing = db.execute("SELECT id FROM reflections WHERE id = ?", [id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Reflection {id} not found"}), 404
     db.execute("DELETE FROM reflections WHERE id = ?", [id])
     return jsonify({"status": "deleted", "id": id})
 
@@ -1065,9 +1108,22 @@ def skill_list():
     return jsonify({"count": len(results), "results": results})
 
 
+@app.route("/skill/<int:skill_id>", methods=["GET"])
+def skill_get(skill_id):
+    db = get_db()
+    rows = db.execute("SELECT id, name, trigger_pattern, description, steps, times_used, last_used, created_at FROM skills WHERE id = ?", [skill_id]).fetchall()
+    if not rows:
+        return jsonify({"error": "Skill not found"}), 404
+    r = rows[0]
+    return jsonify({"id": r[0], "name": r[1], "trigger_pattern": r[2], "description": r[3], "steps": r[4], "times_used": r[5], "last_used": r[6], "created_at": r[7]})
+
+
 @app.route("/skill/<int:id>", methods=["DELETE"])
 def skill_delete(id):
     db = get_db()
+    existing = db.execute("SELECT id FROM skills WHERE id = ?", [id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Skill {id} not found"}), 404
     db.execute("DELETE FROM skills WHERE id = ?", [id])
     return jsonify({"status": "deleted", "id": id})
 
@@ -1114,6 +1170,9 @@ def preference_list():
 @app.route("/preference/<int:id>", methods=["DELETE"])
 def preference_delete(id):
     db = get_db()
+    existing = db.execute("SELECT id FROM preferences WHERE id = ?", [id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Preference {id} not found"}), 404
     db.execute("DELETE FROM preferences WHERE id = ?", [id])
     return jsonify({"status": "deleted", "id": id})
 
@@ -1177,6 +1236,9 @@ def insight_list():
 @app.route("/insight/<int:id>", methods=["DELETE"])
 def insight_delete(id):
     db = get_db()
+    existing = db.execute("SELECT id FROM insights WHERE id = ?", [id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Insight {id} not found"}), 404
     db.execute("DELETE FROM insights WHERE id = ?", [id])
     return jsonify({"status": "deleted", "id": id})
 
@@ -1199,6 +1261,16 @@ def proposal_create():
     }, pk="id")
     last_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
     return jsonify({"status": "ok", "id": last_id})
+
+
+@app.route("/proposal/<int:proposal_id>", methods=["GET"])
+def proposal_get(proposal_id):
+    db = get_db()
+    rows = db.execute("SELECT id, file_path, change_type, description, diff_preview, status, created_at, resolved_at FROM proposals WHERE id = ?", [proposal_id]).fetchall()
+    if not rows:
+        return jsonify({"error": "Proposal not found"}), 404
+    r = rows[0]
+    return jsonify({"id": r[0], "file_path": r[1], "change_type": r[2], "description": r[3], "diff_preview": r[4], "status": r[5], "created_at": r[6], "resolved_at": r[7]})
 
 
 @app.route("/proposal/pending")
@@ -1321,6 +1393,9 @@ def worldmodel_list():
 @app.route("/worldmodel/<int:entry_id>", methods=["DELETE"])
 def worldmodel_delete(entry_id):
     db = get_db()
+    existing = db.execute("SELECT id FROM world_model WHERE id = ?", [entry_id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"World model entry {entry_id} not found"}), 404
     db.execute("DELETE FROM world_model WHERE id = ?", [entry_id])
     return jsonify({"status": "deleted", "id": entry_id})
 
@@ -1365,6 +1440,9 @@ def keywords_create():
 @app.route("/keywords/<int:kw_id>", methods=["DELETE"])
 def keywords_delete(kw_id):
     db = get_db()
+    existing = db.execute("SELECT id FROM importance_keywords WHERE id = ?", [kw_id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Keyword {kw_id} not found"}), 404
     db.execute("DELETE FROM importance_keywords WHERE id = ?", [kw_id])
     with _keywords_lock:
         global _keywords_cache_ts
