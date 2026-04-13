@@ -8,6 +8,8 @@ Endpoints:
   POST /conversation/log
   GET  /conversation/search?q=...&limit=20&channel=&role=
   GET  /conversation/recent?limit=50&channel=
+  POST /conversation/prune?days_old=7
+  GET  /conversation/stats
   POST /memory
   GET  /memory/search?q=...&type=&limit=10
   GET  /memory/list?type=&limit=50
@@ -21,6 +23,7 @@ Endpoints:
 
 import json
 import os
+import re
 import sqlite3
 import datetime
 import struct
@@ -62,6 +65,12 @@ def init_db():
         db["conversations"].create_index(["session_id"], if_not_exists=True)
         db["conversations"].create_index(["role"], if_not_exists=True)
 
+    # Add importance column if missing (migration for existing DBs)
+    try:
+        conn.execute("ALTER TABLE conversations ADD COLUMN importance REAL DEFAULT 0.4")
+    except Exception:
+        pass  # Column already exists
+
     if "conversations_fts" not in db.table_names():
         db.executescript("""
             CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts
@@ -95,6 +104,31 @@ def init_db():
 
 def now_iso():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+# ── Importance classification ──
+_URL_RE = re.compile(r"https?://")
+
+def classify_importance(role, content):
+    """Classify message importance (0.0-1.0) based on role and content keywords."""
+    lower = content.lower()
+
+    # Critical (1.0)
+    if any(kw in lower for kw in ["nota ", "nota:", "save", "guarda", "remember", "recorda", "recordar", "importante"]):
+        return 1.0
+    # High (0.8)
+    if any(kw in lower for kw in ["proyecto", "project", "compra", "pagina", "deploy", "push", "commit", "notion"]):
+        return 0.8
+    # Medium (0.6)
+    if _URL_RE.search(lower) or any(kw in lower for kw in ["busca", "search", "investiga", "agrega", "crea"]):
+        return 0.6
+    # Role-based defaults
+    if role == "system":
+        return 0.1
+    if role == "assistant":
+        return 0.2
+    # Default for user
+    return 0.4
 
 
 # ── Embedding helpers ──
@@ -196,9 +230,12 @@ def conversation_log():
         return jsonify({"error": "role and content required"}), 400
 
     ts = now_iso()
+    importance = classify_importance(role, content)
+
     db["conversations"].insert({
         "timestamp": ts, "session_id": session_id, "role": role,
         "content": content, "channel": channel, "metadata": metadata,
+        "importance": importance,
     }, pk="id")
     last_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -210,7 +247,7 @@ def conversation_log():
     # Generate embedding async
     embed_async("conversation", last_id, content)
 
-    return jsonify({"status": "ok", "id": last_id, "timestamp": ts})
+    return jsonify({"status": "ok", "id": last_id, "timestamp": ts, "importance": importance})
 
 
 @app.route("/conversation/search")
@@ -266,6 +303,107 @@ def conversation_recent():
                 "channel": r[4], "session_id": r[5]} for r in rows]
 
     return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/conversation/prune", methods=["POST"])
+def conversation_prune():
+    """Prune old conversation logs into daily summaries."""
+    db = get_db()
+    data = request.json or {}
+    days_old = int(data.get("days_old", 7))
+
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_old)).isoformat()
+
+    # Get old entries grouped by date (exclude existing summaries)
+    rows = db.execute(
+        "SELECT id, timestamp, role, content FROM conversations WHERE timestamp < ? AND role != 'summary' ORDER BY timestamp",
+        [cutoff]
+    ).fetchall()
+
+    if not rows:
+        return jsonify({"status": "nothing to prune", "pruned": 0, "summaries_created": 0})
+
+    # Group by date
+    by_date = {}
+    for row in rows:
+        date_str = row[1][:10]  # YYYY-MM-DD
+        by_date.setdefault(date_str, []).append(row)
+
+    pruned = 0
+    summaries_created = 0
+
+    for date_str, entries in by_date.items():
+        # Build summary from user messages
+        user_msgs = [e[3] for e in entries if e[2] == "user"]
+        if not user_msgs:
+            user_msgs = [e[3] for e in entries]  # fallback: use all if no user msgs
+        summary_text = f"Day summary for {date_str}: " + " | ".join(user_msgs)
+        summary_text = summary_text[:2000]
+
+        # Insert summary
+        ts = now_iso()
+        db["conversations"].insert({
+            "timestamp": ts, "session_id": "", "role": "summary",
+            "content": summary_text, "channel": "system",
+            "metadata": json.dumps({"pruned_date": date_str, "original_count": len(entries)}),
+            "importance": 0.7,
+        }, pk="id")
+        summary_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("INSERT INTO conversations_fts(rowid, content) VALUES (?, ?)", [summary_id, summary_text])
+
+        # Generate embedding for summary
+        embed_async("conversation", summary_id, summary_text)
+
+        # Delete originals and their embeddings
+        ids_to_delete = [e[0] for e in entries]
+        for eid in ids_to_delete:
+            db["conversations"].delete(eid)
+            try:
+                db.execute("DELETE FROM conversations_fts WHERE rowid = ?", [eid])
+            except Exception:
+                pass
+            try:
+                db.execute("DELETE FROM embeddings WHERE source_type = 'conversation' AND source_id = ?", [eid])
+            except Exception:
+                pass
+
+        pruned += len(ids_to_delete)
+        summaries_created += 1
+
+    return jsonify({"status": "ok", "pruned": pruned, "summaries_created": summaries_created})
+
+
+@app.route("/conversation/stats")
+def conversation_stats():
+    """Get conversation statistics."""
+    db = get_db()
+
+    total = db.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
+
+    # By role
+    role_rows = db.execute("SELECT role, COUNT(*) FROM conversations GROUP BY role").fetchall()
+    by_role = {r[0]: r[1] for r in role_rows}
+
+    # By importance bracket
+    low = db.execute("SELECT COUNT(*) FROM conversations WHERE COALESCE(importance, 0.4) < 0.4").fetchone()[0]
+    medium = db.execute("SELECT COUNT(*) FROM conversations WHERE COALESCE(importance, 0.4) >= 0.4 AND COALESCE(importance, 0.4) < 0.7").fetchone()[0]
+    high = db.execute("SELECT COUNT(*) FROM conversations WHERE COALESCE(importance, 0.4) >= 0.7").fetchone()[0]
+
+    # Timestamps
+    oldest = db.execute("SELECT MIN(timestamp) FROM conversations").fetchone()[0]
+    newest = db.execute("SELECT MAX(timestamp) FROM conversations").fetchone()[0]
+
+    # Summaries
+    summaries = by_role.get("summary", 0)
+
+    return jsonify({
+        "total": total,
+        "by_role": by_role,
+        "by_importance": {"low": low, "medium": medium, "high": high},
+        "oldest_timestamp": oldest,
+        "newest_timestamp": newest,
+        "total_summaries": summaries,
+    })
 
 
 @app.route("/memory", methods=["POST"])
@@ -533,13 +671,13 @@ def hybrid_search():
     # FTS results
     conn = sqlite3.connect(DB_PATH)
     fts_rows = conn.execute(
-        "SELECT c.id, c.content, c.role, c.channel, c.timestamp FROM conversations c JOIN conversations_fts f ON c.id = f.rowid WHERE conversations_fts MATCH ? ORDER BY rank LIMIT ?",
+        "SELECT c.id, c.content, c.role, c.channel, c.timestamp, COALESCE(c.importance, 0.4) FROM conversations c JOIN conversations_fts f ON c.id = f.rowid WHERE conversations_fts MATCH ? ORDER BY rank LIMIT ?",
         [q, limit * 2]
     ).fetchall()
 
     fts_results = {}
     for i, row in enumerate(fts_rows):
-        fts_results[row[0]] = {"id": row[0], "content": row[1], "role": row[2], "channel": row[3], "timestamp": row[4], "fts_rank": i + 1}
+        fts_results[row[0]] = {"id": row[0], "content": row[1], "role": row[2], "channel": row[3], "timestamp": row[4], "importance": row[5], "fts_rank": i + 1}
 
     # Semantic results
     query_emb = generate_embedding(q)
@@ -557,16 +695,17 @@ def hybrid_search():
 
     conn.close()
 
-    # Combine: RRF (Reciprocal Rank Fusion)
+    # Combine: RRF (Reciprocal Rank Fusion) weighted by importance
     all_ids = set(fts_results.keys()) | set(sem_results.keys())
     combined = []
     for sid in all_ids:
         fts_r = fts_results.get(sid, {}).get("fts_rank", 100)
         sem_r = sem_results.get(sid, {}).get("sem_rank", 100)
-        rrf_score = 1 / (60 + fts_r) + 1 / (60 + sem_r)
+        importance = fts_results.get(sid, {}).get("importance", 0.4)
+        rrf_score = (1 / (60 + fts_r) + 1 / (60 + sem_r)) * (0.5 + importance)
         entry = fts_results.get(sid, {})
         if not entry and sid in sem_results:
-            entry = {"id": sid, "content": sem_results[sid].get("text_preview", ""), "role": "", "channel": "", "timestamp": ""}
+            entry = {"id": sid, "content": sem_results[sid].get("text_preview", ""), "role": "", "channel": "", "timestamp": "", "importance": 0.4}
         entry["rrf_score"] = round(rrf_score, 6)
         entry["semantic_score"] = round(sem_results.get(sid, {}).get("score", 0), 4)
         combined.append(entry)
