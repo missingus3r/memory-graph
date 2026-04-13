@@ -8,7 +8,7 @@ Endpoints:
   POST /conversation/log
   GET  /conversation/search?q=...&limit=20&channel=&role=
   GET  /conversation/recent?limit=50&channel=
-  POST /conversation/prune?days_old=7
+  POST /conversation/summarize?days_old=7
   GET  /conversation/stats
   POST /memory
   GET  /memory/search?q=...&type=&limit=10
@@ -305,72 +305,77 @@ def conversation_recent():
     return jsonify({"count": len(results), "results": results})
 
 
-@app.route("/conversation/prune", methods=["POST"])
-def conversation_prune():
-    """Prune old conversation logs into daily summaries."""
+@app.route("/conversation/summarize", methods=["POST"])
+def conversation_summarize():
+    """Generate weekly summaries for old logs without deleting originals."""
     db = get_db()
     data = request.json or {}
     days_old = int(data.get("days_old", 7))
 
     cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_old)).isoformat()
 
-    # Get old entries grouped by date (exclude existing summaries)
+    # Get old entries grouped by ISO week (exclude existing summaries)
     rows = db.execute(
         "SELECT id, timestamp, role, content FROM conversations WHERE timestamp < ? AND role != 'summary' ORDER BY timestamp",
         [cutoff]
     ).fetchall()
 
     if not rows:
-        return jsonify({"status": "nothing to prune", "pruned": 0, "summaries_created": 0})
+        return jsonify({"status": "nothing to summarize", "summaries_created": 0})
 
-    # Group by date
-    by_date = {}
+    # Group by ISO week (YYYY-WNN)
+    by_week = {}
     for row in rows:
-        date_str = row[1][:10]  # YYYY-MM-DD
-        by_date.setdefault(date_str, []).append(row)
+        try:
+            dt = datetime.datetime.fromisoformat(row[1])
+            week_key = f"{dt.isocalendar()[0]}-W{dt.isocalendar()[1]:02d}"
+        except Exception:
+            week_key = row[1][:10]
+        by_week.setdefault(week_key, []).append(row)
 
-    pruned = 0
     summaries_created = 0
+    entries_covered = 0
 
-    for date_str, entries in by_date.items():
-        # Build summary from user messages
+    for week_key, entries in by_week.items():
+        # Check if summary already exists for this week
+        existing = db.execute(
+            "SELECT id FROM conversations WHERE role = 'summary' AND metadata LIKE ?",
+            [f'%"week":"{week_key}"%']
+        ).fetchone()
+        if existing:
+            continue
+
+        # Build summary from user messages (most important content)
         user_msgs = [e[3] for e in entries if e[2] == "user"]
         if not user_msgs:
-            user_msgs = [e[3] for e in entries]  # fallback: use all if no user msgs
-        summary_text = f"Day summary for {date_str}: " + " | ".join(user_msgs)
-        summary_text = summary_text[:2000]
+            user_msgs = [e[3] for e in entries[:20]]
+        summary_text = f"Weekly summary ({week_key}, {len(entries)} messages): " + " | ".join(user_msgs)
+        summary_text = summary_text[:3000]
 
-        # Insert summary
+        # Get date range
+        first_date = entries[0][1][:10]
+        last_date = entries[-1][1][:10]
+        entry_ids = [e[0] for e in entries]
+
+        # Insert summary (originals are NOT deleted)
         ts = now_iso()
         db["conversations"].insert({
             "timestamp": ts, "session_id": "", "role": "summary",
             "content": summary_text, "channel": "system",
-            "metadata": json.dumps({"pruned_date": date_str, "original_count": len(entries)}),
+            "metadata": json.dumps({
+                "week": week_key, "first_date": first_date, "last_date": last_date,
+                "original_count": len(entries), "entry_ids": entry_ids[:100]
+            }),
             "importance": 0.7,
         }, pk="id")
         summary_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         db.execute("INSERT INTO conversations_fts(rowid, content) VALUES (?, ?)", [summary_id, summary_text])
-
-        # Generate embedding for summary
         embed_async("conversation", summary_id, summary_text)
 
-        # Delete originals and their embeddings
-        ids_to_delete = [e[0] for e in entries]
-        for eid in ids_to_delete:
-            db["conversations"].delete(eid)
-            try:
-                db.execute("DELETE FROM conversations_fts WHERE rowid = ?", [eid])
-            except Exception:
-                pass
-            try:
-                db.execute("DELETE FROM embeddings WHERE source_type = 'conversation' AND source_id = ?", [eid])
-            except Exception:
-                pass
-
-        pruned += len(ids_to_delete)
+        entries_covered += len(entries)
         summaries_created += 1
 
-    return jsonify({"status": "ok", "pruned": pruned, "summaries_created": summaries_created})
+    return jsonify({"status": "ok", "entries_covered": entries_covered, "summaries_created": summaries_created})
 
 
 @app.route("/conversation/stats")
@@ -711,7 +716,32 @@ def hybrid_search():
         combined.append(entry)
 
     combined.sort(key=lambda x: x["rrf_score"], reverse=True)
-    return jsonify({"count": len(combined[:limit]), "results": combined[:limit]})
+    results = combined[:limit]
+
+    # Enrich results with associated weekly summaries
+    conn2 = sqlite3.connect(DB_PATH)
+    summaries_cache = {}
+    for entry in results:
+        ts = entry.get("timestamp", "")
+        if not ts or len(ts) < 10:
+            continue
+        try:
+            dt = datetime.datetime.fromisoformat(ts)
+            week_key = f"{dt.isocalendar()[0]}-W{dt.isocalendar()[1]:02d}"
+        except Exception:
+            continue
+        if week_key not in summaries_cache:
+            row = conn2.execute(
+                "SELECT content FROM conversations WHERE role = 'summary' AND metadata LIKE ? LIMIT 1",
+                [f'%"week":"{week_key}"%']
+            ).fetchone()
+            summaries_cache[week_key] = row[0] if row else None
+        if summaries_cache[week_key]:
+            entry["weekly_summary"] = summaries_cache[week_key]
+            entry["week"] = week_key
+    conn2.close()
+
+    return jsonify({"count": len(results), "results": results})
 
 
 @app.route("/embeddings/stats")
