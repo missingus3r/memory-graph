@@ -147,6 +147,11 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <button class="filter-btn active" data-filter="assistant" style="--c:#34d399">Assistant</button>
     <button class="filter-btn active" data-filter="system" style="--c:#fbbf24">System</button>
     <button class="filter-btn active" data-filter="memory" style="--c:#c084fc">Memory</button>
+    <button class="filter-btn active" data-filter="reflection" style="--c:#eab308">Reflections</button>
+    <button class="filter-btn active" data-filter="skill" style="--c:#22c55e">Skills</button>
+    <button class="filter-btn active" data-filter="preference" style="--c:#22d3ee">Preferences</button>
+    <button class="filter-btn active" data-filter="insight" style="--c:#a855f7">Insights</button>
+    <button class="filter-btn active" data-filter="proposal" style="--c:#f97316">Proposals</button>
   </div>
 </div>
 
@@ -163,6 +168,11 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
   <div class="legend-item"><div class="legend-dot" style="background:#c084fc"></div>Memory</div>
   <div class="legend-item"><div class="legend-dot" style="background:#f472b6"></div>Channel</div>
   <div class="legend-item"><div class="legend-dot" style="background:#ff6b6b"></div>Topic</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#eab308"></div>Reflection</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div>Skill</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#22d3ee"></div>Preference</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#a855f7"></div>Insight</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f97316"></div>Proposal</div>
 </div>
 
 <svg id="graph" class="tab-view active"></svg>
@@ -207,11 +217,16 @@ const COLORS = {
   feedback: '#fb923c',
   project: '#2dd4bf',
   reference: '#a78bfa',
+  reflection: '#eab308',
+  skill: '#22c55e',
+  preference: '#22d3ee',
+  insight: '#a855f7',
+  proposal: '#f97316',
 };
 
 let allNodes = [];
 let allLinks = [];
-let activeFilters = new Set(['user','assistant','system','memory']);
+let activeFilters = new Set(['user','assistant','system','memory','reflection','skill','preference','insight','proposal']);
 let simulation, svg, g, link, node, labels;
 let lastConvId = 0;
 
@@ -258,6 +273,11 @@ function getNodeColor(d) {
 function getNodeRadius(d) {
   if (d.group === 'channel' || d.group === 'topic') return 12;
   if (d.group === 'memory') return 8;
+  if (d.group === 'reflection') return 10;
+  if (d.group === 'skill') return 10 + (d.times_used || 0);
+  if (d.group === 'preference') return 8;
+  if (d.group === 'insight') return 9;
+  if (d.group === 'proposal') return 8;
   return 5;
 }
 
@@ -289,7 +309,7 @@ function updateGraph() {
   const nodeEnter = node.enter().append('circle')
     .attr('r', d => d.r)
     .attr('fill', d => getNodeColor(d))
-    .attr('opacity', 0.8)
+    .attr('opacity', d => d.opacity || 0.8)
     .attr('stroke', 'none')
     .attr('cursor', 'pointer')
     .call(d3.drag().on('start',dragStart).on('drag',dragging).on('end',dragEnd))
@@ -359,7 +379,7 @@ function extractTopics(text) {
 }
 
 // Build graph from data
-function buildGraph(conversations, memories) {
+function buildGraph(conversations, memories, reflections, skills, preferences, insights, proposals) {
   const nodeMap = new Map();
   const links = [];
   const channels = new Set();
@@ -423,6 +443,94 @@ function buildGraph(conversations, memories) {
     });
   });
 
+  // Reflection nodes
+  (reflections || []).forEach(r => {
+    const id = 'refl_' + r.id;
+    const date = r.created_at ? new Date(r.created_at).toLocaleDateString('es-UY') : '';
+    nodeMap.set(id, {
+      id, label: 'Reflection: ' + date, group: 'reflection',
+      content: r.summary || r.content || '', r: 10,
+      time: r.created_at ? new Date(r.created_at).toLocaleString('es-UY') : ''
+    });
+    // Link to related conversation if available
+    if (r.conversation_id) {
+      const convId = 'conv_' + r.conversation_id;
+      if (nodeMap.has(convId)) links.push({source: id, target: convId});
+    }
+    extractTopics((r.summary || '') + ' ' + (r.content || '')).forEach(t => {
+      const tid = 'topic_' + t;
+      if (!topicNodes.has(tid)) topicNodes.set(tid, {id: tid, label: t, group: 'topic', r: 12, content: 'Topic: ' + t});
+      links.push({source: tid, target: id});
+    });
+  });
+
+  // Skill nodes
+  (skills || []).forEach(s => {
+    const id = 'skill_' + s.id;
+    const timesUsed = s.times_used || 0;
+    nodeMap.set(id, {
+      id, label: s.name || truncate(s.trigger_pattern || '', 40), group: 'skill',
+      content: (s.name || '') + ' — ' + (s.trigger_pattern || ''), r: 12 + Math.min(timesUsed, 10),
+      times_used: timesUsed,
+      time: s.created_at ? new Date(s.created_at).toLocaleString('es-UY') : ''
+    });
+    extractTopics((s.name || '') + ' ' + (s.trigger_pattern || '')).forEach(t => {
+      const tid = 'topic_' + t;
+      if (!topicNodes.has(tid)) topicNodes.set(tid, {id: tid, label: t, group: 'topic', r: 12, content: 'Topic: ' + t});
+      links.push({source: tid, target: id});
+    });
+  });
+
+  // Preference nodes
+  (preferences || []).forEach(p => {
+    const id = 'pref_' + p.id;
+    const confidence = p.confidence || 0;
+    nodeMap.set(id, {
+      id, label: truncate(p.rule || p.key || '', 40), group: 'preference',
+      content: p.rule || p.value || '', r: 8 + confidence * 4,
+      time: p.created_at ? new Date(p.created_at).toLocaleString('es-UY') : ''
+    });
+    extractTopics(p.rule || p.key || '').forEach(t => {
+      const tid = 'topic_' + t;
+      if (!topicNodes.has(tid)) topicNodes.set(tid, {id: tid, label: t, group: 'topic', r: 12, content: 'Topic: ' + t});
+      links.push({source: tid, target: id});
+    });
+  });
+
+  // Insight nodes
+  (insights || []).forEach(i => {
+    const id = 'insight_' + i.id;
+    const confidence = i.confidence || 0;
+    nodeMap.set(id, {
+      id, label: truncate(i.pattern || i.content || '', 40), group: 'insight',
+      content: i.pattern || i.content || '', r: 8 + confidence * 4,
+      time: i.created_at ? new Date(i.created_at).toLocaleString('es-UY') : ''
+    });
+    extractTopics(i.pattern || i.content || '').forEach(t => {
+      const tid = 'topic_' + t;
+      if (!topicNodes.has(tid)) topicNodes.set(tid, {id: tid, label: t, group: 'topic', r: 12, content: 'Topic: ' + t});
+      links.push({source: tid, target: id});
+    });
+  });
+
+  // Proposal nodes
+  (proposals || []).forEach(p => {
+    const id = 'proposal_' + p.id;
+    const isPending = (p.status || 'pending') === 'pending';
+    nodeMap.set(id, {
+      id, label: truncate(p.description || p.title || '', 40), group: 'proposal',
+      content: p.description || p.title || '', r: 8,
+      opacity: isPending ? 0.9 : 0.5,
+      time: p.created_at ? new Date(p.created_at).toLocaleString('es-UY') : '',
+      subtype: p.status || 'pending'
+    });
+    extractTopics(p.description || p.title || '').forEach(t => {
+      const tid = 'topic_' + t;
+      if (!topicNodes.has(tid)) topicNodes.set(tid, {id: tid, label: t, group: 'topic', r: 12, content: 'Topic: ' + t});
+      links.push({source: tid, target: id});
+    });
+  });
+
   // Add topic nodes
   topicNodes.forEach((v,k) => nodeMap.set(k, v));
 
@@ -434,12 +542,22 @@ function buildGraph(conversations, memories) {
 // Fetch data
 async function fetchData() {
   try {
-    const [convRes, memRes] = await Promise.all([
+    const [convRes, memRes, reflRes, skillRes, prefRes, insightRes, proposalRes] = await Promise.all([
       fetch(API+'/conversation/recent?limit=99999').then(r=>r.json()),
-      fetch(API+'/memory/list').then(r=>r.json())
+      fetch(API+'/memory/list').then(r=>r.json()),
+      fetch(API+'/reflection/list').then(r=>r.json()).catch(()=>[]),
+      fetch(API+'/skill/list').then(r=>r.json()).catch(()=>[]),
+      fetch(API+'/preference/list').then(r=>r.json()).catch(()=>[]),
+      fetch(API+'/insight/list').then(r=>r.json()).catch(()=>[]),
+      fetch(API+'/proposal/pending').then(r=>r.json()).catch(()=>[])
     ]);
     const conversations = convRes.results || convRes || [];
     const memories = memRes.results || memRes || [];
+    const reflections = reflRes.results || reflRes || [];
+    const skills = skillRes.results || skillRes || [];
+    const preferences = prefRes.results || prefRes || [];
+    const insights = insightRes.results || insightRes || [];
+    const proposals = proposalRes.results || proposalRes || [];
 
     if (conversations.length > 0) {
       const latest = conversations[0];
@@ -448,7 +566,7 @@ async function fetchData() {
     }
 
     logsData = conversations;
-    buildGraph(conversations, memories);
+    buildGraph(conversations, memories, reflections, skills, preferences, insights, proposals);
     if (currentTab === 'logs') renderLogs();
   } catch(e) {
     console.error('Fetch error:', e);
@@ -473,7 +591,7 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const f = btn.dataset.filter;
     if (f === 'all') {
-      const allActive = document.querySelectorAll('.filter-btn.active').length === 5;
+      const allActive = document.querySelectorAll('.filter-btn.active').length === document.querySelectorAll('.filter-btn').length;
       document.querySelectorAll('.filter-btn').forEach(b => {
         if (allActive) { b.classList.remove('active'); activeFilters.clear(); }
         else { b.classList.add('active'); activeFilters.add(b.dataset.filter); }
