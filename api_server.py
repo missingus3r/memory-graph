@@ -19,6 +19,11 @@ Endpoints:
   GET  /entity/search?q=...&type=&limit=20
   GET  /stats
   GET  /health
+  GET  /version
+  POST /worldmodel
+  GET  /worldmodel/active
+  GET  /worldmodel/list?category=
+  DELETE /worldmodel/<id>
 """
 
 import json
@@ -37,7 +42,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -125,6 +130,13 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             file_path TEXT, change_type TEXT, description TEXT, diff_preview TEXT,
             status TEXT DEFAULT 'pending', created_at TEXT, resolved_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS world_model (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT, pattern TEXT, evidence TEXT,
+            confidence REAL DEFAULT 0.5, occurrences INTEGER DEFAULT 1,
+            first_seen TEXT, last_seen TEXT, expires_at TEXT,
+            created_at TEXT, updated_at TEXT
         )"""
     ]:
         try:
@@ -1087,6 +1099,90 @@ def proposal_reject(proposal_id):
     ts = now_iso()
     db.execute("UPDATE proposals SET status = 'rejected', resolved_at = ? WHERE id = ?", [ts, proposal_id])
     return jsonify({"status": "rejected", "id": proposal_id})
+
+
+# -- World Model --
+
+@app.route("/worldmodel", methods=["POST"])
+def worldmodel_create():
+    """Create or update a world model entry. If a matching pattern+category exists, update it."""
+    db = get_db()
+    data = request.json or {}
+    ts = now_iso()
+    category = data.get("category", "behavior")
+    pattern = data.get("pattern", "")
+
+    # Check if this pattern already exists in this category
+    existing = db.execute(
+        "SELECT id, occurrences, confidence FROM world_model WHERE category = ? AND pattern = ?",
+        [category, pattern]
+    ).fetchone()
+
+    if existing:
+        new_occ = existing[1] + 1
+        new_conf = min(0.99, existing[2] + 0.05)
+        db.execute(
+            "UPDATE world_model SET occurrences = ?, confidence = ?, last_seen = ?, updated_at = ?, evidence = COALESCE(?, evidence), expires_at = COALESCE(?, expires_at) WHERE id = ?",
+            [new_occ, new_conf, ts, ts, data.get("evidence"), data.get("expires_at"), existing[0]]
+        )
+        return jsonify({"status": "updated", "id": existing[0], "occurrences": new_occ, "confidence": new_conf})
+
+    db["world_model"].insert({
+        "category": category,
+        "pattern": pattern,
+        "evidence": data.get("evidence", ""),
+        "confidence": data.get("confidence", 0.5),
+        "occurrences": 1,
+        "first_seen": ts,
+        "last_seen": ts,
+        "expires_at": data.get("expires_at", ""),
+        "created_at": ts,
+        "updated_at": ts,
+    }, pk="id")
+    last_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return jsonify({"status": "created", "id": last_id})
+
+
+@app.route("/worldmodel/active")
+def worldmodel_active():
+    """Get active (non-expired) world model entries with confidence >= 0.4."""
+    db = get_db()
+    ts = now_iso()
+    rows = db.execute(
+        "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at FROM world_model WHERE confidence >= 0.4 AND (expires_at = '' OR expires_at IS NULL OR expires_at > ?) ORDER BY confidence DESC, occurrences DESC",
+        [ts]
+    ).fetchall()
+    results = [{"id": r[0], "category": r[1], "pattern": r[2], "evidence": r[3],
+                "confidence": r[4], "occurrences": r[5], "first_seen": r[6],
+                "last_seen": r[7], "expires_at": r[8], "created_at": r[9]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/worldmodel/list")
+def worldmodel_list():
+    """List all world model entries."""
+    db = get_db()
+    category = request.args.get("category", "")
+    if category:
+        rows = db.execute(
+            "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at FROM world_model WHERE category = ? ORDER BY confidence DESC",
+            [category]
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at FROM world_model ORDER BY category, confidence DESC"
+        ).fetchall()
+    results = [{"id": r[0], "category": r[1], "pattern": r[2], "evidence": r[3],
+                "confidence": r[4], "occurrences": r[5], "first_seen": r[6],
+                "last_seen": r[7], "expires_at": r[8], "created_at": r[9]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/worldmodel/<int:entry_id>", methods=["DELETE"])
+def worldmodel_delete(entry_id):
+    db = get_db()
+    db.execute("DELETE FROM world_model WHERE id = ?", [entry_id])
+    return jsonify({"status": "deleted", "id": entry_id})
 
 
 if __name__ == "__main__":

@@ -1137,10 +1137,11 @@ async function renderBrain() {
   const panel = document.getElementById('brainPanel');
   panel.innerHTML = '<div style="max-width:1000px;margin:0 auto;padding:20px;color:#64748b;font-size:13px">Loading brain data...</div>';
 
-  const [skills, preferences, reflections, insights, proposals] = await Promise.all([
+  const [skills, preferences, reflections, worldmodel, insights, proposals] = await Promise.all([
     fetch(API+'/skill/list').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/preference/list').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/reflection/list').then(r=>r.json()).catch(()=>({results:[]})),
+    fetch(API+'/worldmodel/active').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/insight/active').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/proposal/pending').then(r=>r.json()).catch(()=>({results:[]}))
   ]);
@@ -1148,6 +1149,7 @@ async function renderBrain() {
   const sk = skills.results || skills || [];
   const pr = preferences.results || preferences || [];
   const rf = reflections.results || reflections || [];
+  const wm = worldmodel.results || worldmodel || [];
   const ins = insights.results || insights || [];
   const prop = proposals.results || proposals || [];
 
@@ -1250,24 +1252,54 @@ async function renderBrain() {
   }
   html += '</div>';
 
-  // Section 4: World Model / Insights
+  // Section 4: World Model
   html += `<div style="${sectionStyle}">`;
-  html += `<div style="${titleStyle('#a855f7')}">World Model ${countBadge(ins.length, '#a855f7')}</div>`;
-  if (ins.length === 0) {
-    html += emptyMsg('No patterns detected yet');
+  html += `<div style="${titleStyle('#a855f7')}">World Model ${countBadge(wm.length, '#a855f7')}</div>`;
+  if (wm.length === 0) {
+    html += emptyMsg('No behavioral patterns detected yet');
   } else {
+    const cats = {};
+    wm.forEach(w => { const c = w.category || 'other'; if (!cats[c]) cats[c] = []; cats[c].push(w); });
+    const catColors = {behavior:'#a855f7', schedule:'#60a5fa', topics:'#34d399', correlations:'#f472b6', other:'#94a3b8'};
+    Object.entries(cats).forEach(([cat, entries]) => {
+      html += `<div style="font-size:12px;font-weight:700;color:${catColors[cat]||'#a855f7'};text-transform:uppercase;letter-spacing:1px;margin:12px 0 8px;padding-left:4px">${cat} (${entries.length})</div>`;
+      entries.forEach(w => {
+        const conf = w.confidence || 0;
+        const pct = Math.round(conf * 100);
+        const confColor = conf > 0.7 ? '#34d399' : conf > 0.4 ? '#fbbf24' : '#64748b';
+        const occ = w.occurrences || 1;
+        const lastSeen = w.last_seen ? new Date(w.last_seen).toLocaleDateString('es-UY', {month:'short', day:'numeric'}) : '';
+        html += `<div style="${cardStyle(catColors[cat]||'#a855f7')}">
+          <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px">${(w.pattern || 'Unknown').replace(/</g,'&lt;')}</div>
+          ${w.evidence ? '<div style="color:#64748b;font-size:12px;margin-bottom:6px">' + (typeof w.evidence === 'string' ? w.evidence.replace(/</g,'&lt;') : JSON.stringify(w.evidence)) + '</div>' : ''}
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <span style="font-size:10px;font-weight:600;background:${confColor}22;color:${confColor};padding:2px 8px;border-radius:6px">${pct}% confidence</span>
+            <span style="font-size:10px;font-weight:600;background:rgba(255,255,255,0.05);color:#94a3b8;padding:2px 8px;border-radius:6px">Seen ${occ}x</span>
+            ${lastSeen ? '<span style="font-size:10px;color:#475569">Last: ' + lastSeen + '</span>' : ''}
+            ${w.expires_at ? '<span style="font-size:10px;color:#475569">Exp: ' + new Date(w.expires_at).toLocaleDateString('es-UY',{month:'short',day:'numeric'}) + '</span>' : ''}
+          </div>
+        </div>`;
+      });
+    });
+  }
+  html += '</div>';
+
+  // Section 4b: Insights
+  if (ins.length > 0) {
+    html += `<div style="${sectionStyle}">`;
+    html += `<div style="${titleStyle('#c084fc')}">Insights ${countBadge(ins.length, '#c084fc')}</div>`;
     ins.forEach(i => {
       const conf = i.confidence || 0;
       const pct = Math.round(conf * 100);
       const confColor = conf > 0.7 ? '#34d399' : conf > 0.4 ? '#fbbf24' : '#64748b';
-      html += `<div style="${cardStyle('#a855f7')}">
-        <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px">${(i.pattern || i.content || 'Unknown pattern').replace(/</g,'&lt;')}</div>
+      html += `<div style="${cardStyle('#c084fc')}">
+        <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px">${(i.pattern || i.content || 'Unknown').replace(/</g,'&lt;')}</div>
         ${i.evidence ? '<div style="color:#64748b;font-size:12px;margin-bottom:6px">' + (typeof i.evidence === 'string' ? i.evidence.replace(/</g,'&lt;') : JSON.stringify(i.evidence)) + '</div>' : ''}
         <span style="font-size:10px;font-weight:600;background:${confColor}22;color:${confColor};padding:2px 8px;border-radius:6px">${pct}% confidence</span>
       </div>`;
     });
+    html += '</div>';
   }
-  html += '</div>';
 
   // Section 5: Proposals
   html += `<div style="${sectionStyle}">`;
