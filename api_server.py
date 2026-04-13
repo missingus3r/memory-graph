@@ -37,7 +37,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -551,6 +551,7 @@ def memory_delete(mem_id):
 
     db["memories"].delete(mem_id)
     db.execute("DELETE FROM memories_fts WHERE rowid = ?", [mem_id])
+    db.execute("DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?", [mem_id])
     return jsonify({"status": "deleted", "id": mem_id})
 
 
