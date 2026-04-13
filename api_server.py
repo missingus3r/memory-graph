@@ -99,6 +99,38 @@ def init_db():
         db["entities"].create_index(["name"], if_not_exists=True)
         db["entities"].create_index(["type"], if_not_exists=True)
 
+    # Proto-AGI tables
+    for tbl_sql in [
+        """CREATE TABLE IF NOT EXISTS reflections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT, analysis TEXT, insights TEXT, actions TEXT, created_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS skills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT, trigger_pattern TEXT, description TEXT, steps TEXT,
+            times_used INTEGER DEFAULT 0, last_used TEXT, created_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule TEXT, source_count INTEGER DEFAULT 0, source_ids TEXT,
+            confidence REAL DEFAULT 0.5, created_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS insights (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT, pattern TEXT, evidence TEXT, confidence REAL DEFAULT 0.5,
+            valid_until TEXT, created_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT, change_type TEXT, description TEXT, diff_preview TEXT,
+            status TEXT DEFAULT 'pending', created_at TEXT, resolved_at TEXT
+        )"""
+    ]:
+        try:
+            conn.execute(tbl_sql)
+        except Exception:
+            pass
+
     conn.close()
 
 
@@ -819,6 +851,235 @@ def key_value(key):
         if row:
             return jsonify(json.loads(row[0]))
         return jsonify({})
+
+
+# ── Proto-AGI Endpoints ──
+
+# -- Reflections --
+
+@app.route("/reflection", methods=["POST"])
+def reflection_create():
+    db = get_db()
+    data = request.json or {}
+    ts = now_iso()
+    db["reflections"].insert({
+        "date": data.get("date", ts[:10]),
+        "analysis": data.get("analysis", ""),
+        "insights": data.get("insights", ""),
+        "actions": data.get("actions", ""),
+        "created_at": ts,
+    }, pk="id")
+    last_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return jsonify({"status": "ok", "id": last_id})
+
+
+@app.route("/reflection/recent")
+def reflection_recent():
+    db = get_db()
+    limit = int(request.args.get("limit", "5"))
+    rows = db.execute(
+        "SELECT id, date, analysis, insights, actions, created_at FROM reflections ORDER BY created_at DESC LIMIT ?",
+        [limit]
+    ).fetchall()
+    results = [{"id": r[0], "date": r[1], "analysis": r[2], "insights": r[3],
+                "actions": r[4], "created_at": r[5]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/reflection/list")
+def reflection_list():
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, date, analysis, insights, actions, created_at FROM reflections ORDER BY created_at DESC"
+    ).fetchall()
+    results = [{"id": r[0], "date": r[1], "analysis": r[2], "insights": r[3],
+                "actions": r[4], "created_at": r[5]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+# -- Skills --
+
+@app.route("/skill", methods=["POST"])
+def skill_create():
+    db = get_db()
+    data = request.json or {}
+    ts = now_iso()
+    db["skills"].insert({
+        "name": data.get("name", ""),
+        "trigger_pattern": data.get("trigger_pattern", ""),
+        "description": data.get("description", ""),
+        "steps": data.get("steps", ""),
+        "times_used": 0,
+        "last_used": None,
+        "created_at": ts,
+    }, pk="id")
+    last_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return jsonify({"status": "ok", "id": last_id})
+
+
+@app.route("/skill/match")
+def skill_match():
+    db = get_db()
+    task = request.args.get("task", "")
+    if not task:
+        return jsonify({"error": "task parameter required"}), 400
+    pattern = f"%{task}%"
+    rows = db.execute(
+        "SELECT id, name, trigger_pattern, description, steps, times_used, last_used, created_at FROM skills WHERE trigger_pattern LIKE ? OR description LIKE ? ORDER BY times_used DESC LIMIT 3",
+        [pattern, pattern]
+    ).fetchall()
+    results = [{"id": r[0], "name": r[1], "trigger_pattern": r[2], "description": r[3],
+                "steps": r[4], "times_used": r[5], "last_used": r[6], "created_at": r[7]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/skill/list")
+def skill_list():
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, name, trigger_pattern, description, steps, times_used, last_used, created_at FROM skills ORDER BY times_used DESC"
+    ).fetchall()
+    results = [{"id": r[0], "name": r[1], "trigger_pattern": r[2], "description": r[3],
+                "steps": r[4], "times_used": r[5], "last_used": r[6], "created_at": r[7]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/skill/<int:skill_id>/use", methods=["PUT"])
+def skill_use(skill_id):
+    db = get_db()
+    ts = now_iso()
+    db.execute("UPDATE skills SET times_used = times_used + 1, last_used = ? WHERE id = ?", [ts, skill_id])
+    return jsonify({"status": "ok", "id": skill_id})
+
+
+# -- Preferences --
+
+@app.route("/preference", methods=["POST"])
+def preference_create():
+    db = get_db()
+    data = request.json or {}
+    ts = now_iso()
+    db["preferences"].insert({
+        "rule": data.get("rule", ""),
+        "source_count": data.get("source_count", 0),
+        "source_ids": data.get("source_ids", ""),
+        "confidence": data.get("confidence", 0.5),
+        "created_at": ts,
+    }, pk="id")
+    last_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return jsonify({"status": "ok", "id": last_id})
+
+
+@app.route("/preference/list")
+def preference_list():
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, rule, source_count, source_ids, confidence, created_at FROM preferences ORDER BY confidence DESC"
+    ).fetchall()
+    results = [{"id": r[0], "rule": r[1], "source_count": r[2], "source_ids": r[3],
+                "confidence": r[4], "created_at": r[5]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/preference/active")
+def preference_active():
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, rule, source_count, source_ids, confidence, created_at FROM preferences WHERE confidence >= 0.7 ORDER BY confidence DESC"
+    ).fetchall()
+    results = [{"id": r[0], "rule": r[1], "source_count": r[2], "source_ids": r[3],
+                "confidence": r[4], "created_at": r[5]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+# -- Insights --
+
+@app.route("/insight", methods=["POST"])
+def insight_create():
+    db = get_db()
+    data = request.json or {}
+    ts = now_iso()
+    db["insights"].insert({
+        "type": data.get("type", ""),
+        "pattern": data.get("pattern", ""),
+        "evidence": data.get("evidence", ""),
+        "confidence": data.get("confidence", 0.5),
+        "valid_until": data.get("valid_until"),
+        "created_at": ts,
+    }, pk="id")
+    last_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return jsonify({"status": "ok", "id": last_id})
+
+
+@app.route("/insight/active")
+def insight_active():
+    db = get_db()
+    ts = now_iso()
+    rows = db.execute(
+        "SELECT id, type, pattern, evidence, confidence, valid_until, created_at FROM insights WHERE valid_until IS NULL OR valid_until > ? ORDER BY confidence DESC",
+        [ts]
+    ).fetchall()
+    results = [{"id": r[0], "type": r[1], "pattern": r[2], "evidence": r[3],
+                "confidence": r[4], "valid_until": r[5], "created_at": r[6]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/insight/list")
+def insight_list():
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, type, pattern, evidence, confidence, valid_until, created_at FROM insights ORDER BY created_at DESC"
+    ).fetchall()
+    results = [{"id": r[0], "type": r[1], "pattern": r[2], "evidence": r[3],
+                "confidence": r[4], "valid_until": r[5], "created_at": r[6]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+# -- Proposals --
+
+@app.route("/proposal", methods=["POST"])
+def proposal_create():
+    db = get_db()
+    data = request.json or {}
+    ts = now_iso()
+    db["proposals"].insert({
+        "file_path": data.get("file_path", ""),
+        "change_type": data.get("change_type", ""),
+        "description": data.get("description", ""),
+        "diff_preview": data.get("diff_preview", ""),
+        "status": "pending",
+        "created_at": ts,
+        "resolved_at": None,
+    }, pk="id")
+    last_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return jsonify({"status": "ok", "id": last_id})
+
+
+@app.route("/proposal/pending")
+def proposal_pending():
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, file_path, change_type, description, diff_preview, status, created_at, resolved_at FROM proposals WHERE status = 'pending' ORDER BY created_at DESC"
+    ).fetchall()
+    results = [{"id": r[0], "file_path": r[1], "change_type": r[2], "description": r[3],
+                "diff_preview": r[4], "status": r[5], "created_at": r[6], "resolved_at": r[7]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/proposal/<int:proposal_id>/approve", methods=["PUT"])
+def proposal_approve(proposal_id):
+    db = get_db()
+    ts = now_iso()
+    db.execute("UPDATE proposals SET status = 'approved', resolved_at = ? WHERE id = ?", [ts, proposal_id])
+    return jsonify({"status": "approved", "id": proposal_id})
+
+
+@app.route("/proposal/<int:proposal_id>/reject", methods=["PUT"])
+def proposal_reject(proposal_id):
+    db = get_db()
+    ts = now_iso()
+    db.execute("UPDATE proposals SET status = 'rejected', resolved_at = ? WHERE id = ?", [ts, proposal_id])
+    return jsonify({"status": "rejected", "id": proposal_id})
 
 
 if __name__ == "__main__":
