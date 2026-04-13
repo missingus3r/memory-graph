@@ -1137,13 +1137,14 @@ async function renderBrain() {
   const panel = document.getElementById('brainPanel');
   panel.innerHTML = '<div style="max-width:1000px;margin:0 auto;padding:20px;color:#64748b;font-size:13px">Loading brain data...</div>';
 
-  const [skills, preferences, reflections, worldmodel, insights, proposals] = await Promise.all([
+  const [skills, preferences, reflections, worldmodel, insights, proposals, keywords] = await Promise.all([
     fetch(API+'/skill/list').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/preference/list').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/reflection/list').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/worldmodel/active').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/insight/active').then(r=>r.json()).catch(()=>({results:[]})),
-    fetch(API+'/proposal/pending').then(r=>r.json()).catch(()=>({results:[]}))
+    fetch(API+'/proposal/pending').then(r=>r.json()).catch(()=>({results:[]})),
+    fetch(API+'/keywords').then(r=>r.json()).catch(()=>({results:[]}))
   ]);
 
   const sk = skills.results || skills || [];
@@ -1152,6 +1153,7 @@ async function renderBrain() {
   const wm = worldmodel.results || worldmodel || [];
   const ins = insights.results || insights || [];
   const prop = proposals.results || proposals || [];
+  const kws = keywords.results || keywords || [];
 
   const cardStyle = (color) => `background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-left:3px solid ${color};border-radius:12px;padding:16px 20px;margin-bottom:12px`;
   const sectionStyle = 'margin-bottom:32px';
@@ -1301,7 +1303,37 @@ async function renderBrain() {
     html += '</div>';
   }
 
-  // Section 5: Proposals
+  // Section 6: Importance Keywords
+  html += `<div style="${sectionStyle}">`;
+  html += `<div style="${titleStyle('#38bdf8')}">Importance Keywords ${countBadge(kws.length, '#38bdf8')}</div>`;
+  if (kws.length === 0) {
+    html += emptyMsg('No keywords configured');
+  } else {
+    const byScore = {};
+    kws.forEach(k => { const s = k.score; if (!byScore[s]) byScore[s] = []; byScore[s].push(k); });
+    const scoreLabels = {1:'Critical (1.0)', 0.8:'High (0.8)', 0.6:'Medium (0.6)'};
+    const scoreColors = {1:'#ef4444', 0.8:'#f97316', 0.6:'#eab308'};
+    Object.entries(byScore).sort((a,b) => b[0]-a[0]).forEach(([score, items]) => {
+      const sc = parseFloat(score);
+      const label = scoreLabels[sc] || `Score ${sc}`;
+      const color = scoreColors[sc] || '#64748b';
+      html += `<div style="margin-bottom:12px">`;
+      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}</div>`;
+      html += `<div style="display:flex;flex-wrap:wrap;gap:6px">`;
+      items.sort((a,b) => (b.hits||0) - (a.hits||0)).forEach(k => {
+        const hits = k.hits || 0;
+        const opacity = hits > 0 ? 1 : 0.6;
+        html += `<span style="display:inline-flex;align-items:center;gap:4px;background:${color}15;border:1px solid ${color}30;color:${color};padding:3px 10px;border-radius:6px;font-size:12px;font-weight:500;opacity:${opacity}">`;
+        html += `${(k.keyword||'').replace(/</g,'&lt;')}`;
+        if (hits > 0) html += `<span style="font-size:9px;background:${color}25;padding:1px 5px;border-radius:4px;font-weight:700">${hits}</span>`;
+        html += `</span>`;
+      });
+      html += `</div></div>`;
+    });
+  }
+  html += '</div>';
+
+  // Section 7: Proposals
   html += `<div style="${sectionStyle}">`;
   html += `<div style="${titleStyle('#f97316')}">Self-Improvement Proposals ${countBadge(prop.length, '#f97316')}</div>`;
   if (prop.length === 0) {
