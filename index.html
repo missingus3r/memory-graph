@@ -1137,14 +1137,15 @@ async function renderBrain() {
   const panel = document.getElementById('brainPanel');
   panel.innerHTML = '<div style="max-width:1000px;margin:0 auto;padding:20px;color:#64748b;font-size:13px">Loading brain data...</div>';
 
-  const [skills, preferences, reflections, worldmodel, insights, proposals, keywords] = await Promise.all([
+  const [skills, preferences, reflections, worldmodel, insights, proposals, keywords, entities] = await Promise.all([
     fetch(API+'/skill/list').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/preference/list').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/reflection/list').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/worldmodel/active').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/insight/active').then(r=>r.json()).catch(()=>({results:[]})),
     fetch(API+'/proposal/pending').then(r=>r.json()).catch(()=>({results:[]})),
-    fetch(API+'/keywords').then(r=>r.json()).catch(()=>({results:[]}))
+    fetch(API+'/keywords').then(r=>r.json()).catch(()=>({results:[]})),
+    fetch(API+'/entity/search?q=&limit=50').then(r=>r.json()).catch(()=>({results:[]}))
   ]);
 
   const sk = skills.results || skills || [];
@@ -1154,6 +1155,7 @@ async function renderBrain() {
   const ins = insights.results || insights || [];
   const prop = proposals.results || proposals || [];
   const kws = keywords.results || keywords || [];
+  const ents = entities.results || entities || [];
 
   const cardStyle = (color) => `background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-left:3px solid ${color};border-radius:12px;padding:16px 20px;margin-bottom:12px`;
   const sectionStyle = 'margin-bottom:32px';
@@ -1177,6 +1179,30 @@ async function renderBrain() {
         ${s.description ? '<div style="color:#94a3b8;font-size:13px;margin-bottom:6px">' + s.description.replace(/</g,'&lt;') + '</div>' : ''}
         <span style="font-size:10px;font-weight:600;background:rgba(34,197,94,0.1);color:#22c55e;padding:2px 8px;border-radius:6px">Used ${used}x</span>
       </div>`;
+    });
+  }
+  html += '</div>';
+
+  // Section 1b: Entities
+  html += `<div style="${sectionStyle}">`;
+  html += `<div style="${titleStyle('#f472b6')}">Entities ${countBadge(ents.length, '#f472b6')}</div>`;
+  if (ents.length === 0) {
+    html += emptyMsg('No entities tracked yet');
+  } else {
+    const byType = {};
+    ents.forEach(e => { const t = e.type || 'other'; if (!byType[t]) byType[t] = []; byType[t].push(e); });
+    const typeColors = {person:'#f472b6', company:'#60a5fa', tool:'#34d399', concept:'#c084fc', other:'#94a3b8'};
+    Object.entries(byType).forEach(([type, items]) => {
+      html += `<div style="font-size:11px;font-weight:700;color:${typeColors[type]||'#94a3b8'};text-transform:uppercase;letter-spacing:1px;margin:10px 0 6px">${type} (${items.length})</div>`;
+      html += `<div style="display:flex;flex-wrap:wrap;gap:6px">`;
+      items.forEach(e => {
+        let detail = '';
+        try { const d = JSON.parse(e.details || '{}'); detail = Object.values(d).filter(v=>typeof v==='string').slice(0,2).join(', '); } catch(_){}
+        html += `<span title="${detail.replace(/"/g,'&quot;')}" style="display:inline-flex;align-items:center;gap:4px;background:${(typeColors[type]||'#94a3b8')}15;border:1px solid ${(typeColors[type]||'#94a3b8')}30;color:#e2e8f0;padding:4px 10px;border-radius:6px;font-size:12px;cursor:default">`;
+        html += `${(e.name||'Unknown').replace(/</g,'&lt;')}`;
+        html += `</span>`;
+      });
+      html += `</div>`;
     });
   }
   html += '</div>';
