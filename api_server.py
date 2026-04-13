@@ -42,7 +42,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -162,7 +162,7 @@ def classify_importance(role, content):
     if any(kw in lower for kw in ["nota ", "nota:", "save", "guarda", "remember", "recorda", "recordar", "importante"]):
         return 1.0
     # High (0.8)
-    if any(kw in lower for kw in ["proyecto", "project", "compra", "pagina", "deploy", "push", "commit", "notion"]):
+    if any(kw in lower for kw in ["proyecto", "project", "compra", "pagina", "deploy", "push", "pushear", "commit", "notion"]):
         return 0.8
     # Medium (0.6)
     if _URL_RE.search(lower) or any(kw in lower for kw in ["busca", "search", "investiga", "agrega", "crea"]):
