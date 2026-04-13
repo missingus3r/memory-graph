@@ -37,6 +37,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
+VERSION = "1.0.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -824,7 +825,12 @@ def embeddings_reindex():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "version": VERSION})
+
+
+@app.route("/version")
+def version():
+    return jsonify({"version": VERSION})
 
 
 @app.route("/graph")
