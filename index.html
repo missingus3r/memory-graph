@@ -140,6 +140,7 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <button class="tab-btn" data-tab="arch">Arch</button>
     <button class="tab-btn" data-tab="rag">RAG</button>
     <button class="tab-btn" data-tab="brain">Brain</button>
+    <button class="tab-btn" data-tab="crons">Crons</button>
   </div>
   <div class="stats">
     <span>Nodos: <b id="nodeCount">0</b></span>
@@ -205,7 +206,26 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <div id="ragResults"></div>
   </div>
 </div>
-<div id="brainPanel" style="display:none;position:fixed;top:var(--topbar-h);left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f">
+<div id="cronsPanel" style="display:none;position:fixed;top:var(--topbar-h);left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
+  <div style="max-width:1100px;margin:0 auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+      <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0">⏰ Crons</h2>
+      <span id="cronsClock" style="font-family:monospace;font-size:12px;color:#64748b"></span>
+    </div>
+    <p style="color:#64748b;font-size:12px;margin:0 0 20px 0">Runtime = crons cargados ahora mismo en la sesión de Claude (con countdown al próximo fire). Persistidos = prompts guardados en disco en <code style="color:#94a3b8">~/.claude/cron-prompts.md</code>, base de verdad ante reinicios.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:20px">
+      <div>
+        <h3 style="color:#34d399;font-size:14px;font-weight:700;margin:0 0 10px 0">🟢 Runtime activos <span id="cronsRuntimeCount" style="font-size:11px;color:#64748b;margin-left:6px"></span></h3>
+        <div id="cronsRuntime" style="display:grid;gap:8px"></div>
+      </div>
+      <div>
+        <h3 style="color:#94a3b8;font-size:14px;font-weight:700;margin:0 0 10px 0">💾 Persistidos en disco <span id="cronsPersistedCount" style="font-size:11px;color:#64748b;margin-left:6px"></span></h3>
+        <div id="cronsPersisted" style="display:grid;gap:8px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="brainPanel" style="display:none;position:fixed;top:var(--topbar-h);left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f"
   <div style="position:sticky;top:0;z-index:5;background:rgba(10,10,15,0.95);backdrop-filter:blur(10px);border-bottom:1px solid rgba(255,255,255,0.06);padding:12px 20px">
     <div style="max-width:1200px;margin:0 auto;display:flex;gap:6px;flex-wrap:wrap" id="brainSubNav"></div>
   </div>
@@ -759,7 +779,8 @@ function switchTab(tab) {
   document.getElementById('archPanel').style.display = tab === 'arch' ? 'block' : 'none';
   document.getElementById('ragPanel').style.display = tab === 'rag' ? 'block' : 'none';
   document.getElementById('brainPanel').style.display = tab === 'brain' ? 'block' : 'none';
-  document.body.style.overflow = (['logs','rag','brain'].includes(tab)) ? 'auto' : 'hidden';
+  document.getElementById('cronsPanel').style.display = tab === 'crons' ? 'block' : 'none';
+  document.body.style.overflow = (['logs','rag','brain','crons'].includes(tab)) ? 'auto' : 'hidden';
 
   document.querySelector('.filters').style.display = tab === 'graph' ? 'flex' : 'none';
   document.querySelector('.legend').style.display = tab === 'graph' ? 'flex' : 'none';
@@ -768,6 +789,7 @@ function switchTab(tab) {
   if (tab === 'arch') renderArch();
   if (tab === 'rag') loadRagDashboard();
   if (tab === 'brain') renderBrain();
+  if (tab === 'crons') renderCrons();
 }
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -777,7 +799,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // Restore tab from hash (deferred to ensure all data is defined)
 window.addEventListener('hashchange', () => {
   const h = location.hash.replace('#','');
-  if (['logs','graph','arch','rag','brain'].includes(h)) switchTab(h);
+  if (['logs','graph','arch','rag','brain','crons'].includes(h)) switchTab(h);
 });
 
 function getCollapsedStates() {
@@ -1256,6 +1278,133 @@ function doReindex() {
   });
 }
 
+
+// === Cron helpers ===
+function _matchField(val, field) {
+  if (field === '*') return true;
+  for (const part of field.split(',')) {
+    let p = part;
+    let step = 1;
+    if (p.includes('/')) { const [a,b]=p.split('/'); p=a; step=parseInt(b)||1; }
+    if (p === '*') { if (val % step === 0) return true; continue; }
+    if (p.includes('-')) {
+      const [lo,hi] = p.split('-').map(Number);
+      if (val >= lo && val <= hi && ((val - lo) % step === 0)) return true;
+    } else {
+      const n = parseInt(p);
+      if (!isNaN(n) && val === n) return true;
+    }
+  }
+  return false;
+}
+function cronNext(expr, from) {
+  if (!expr) return null;
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+  const [minF, hrF, domF, monF, dowF] = parts;
+  const d = new Date(from.getTime() + 60000);
+  d.setSeconds(0, 0);
+  for (let i = 0; i < 60*24*366; i++) {
+    if (_matchField(d.getMinutes(), minF) &&
+        _matchField(d.getHours(), hrF) &&
+        _matchField(d.getDate(), domF) &&
+        _matchField(d.getMonth()+1, monF) &&
+        _matchField(d.getDay(), dowF)) {
+      return d;
+    }
+    d.setMinutes(d.getMinutes() + 1);
+  }
+  return null;
+}
+function formatCountdown(ms) {
+  if (ms < 0) return 'now';
+  const s = Math.floor(ms/1000);
+  const d = Math.floor(s/86400);
+  const h = Math.floor((s%86400)/3600);
+  const m = Math.floor((s%3600)/60);
+  const ss = s%60;
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${ss}s`;
+  if (m > 0) return `${m}m ${ss}s`;
+  return `${ss}s`;
+}
+
+let _cronsInterval = null;
+async function renderCrons() {
+  const runtimeEl = document.getElementById('cronsRuntime');
+  const persistedEl = document.getElementById('cronsPersisted');
+  runtimeEl.innerHTML = '<div style="color:#64748b;font-size:12px">Cargando...</div>';
+  persistedEl.innerHTML = '<div style="color:#64748b;font-size:12px">Cargando...</div>';
+  try {
+    const [active, prompts] = await Promise.all([
+      fetch('/cron/active').then(r => r.json()),
+      fetch('/cron/prompts').then(r => r.json()).catch(() => ({sections:[]})),
+    ]);
+    const runCrons = active.crons || [];
+    const persisted = prompts.sections || [];
+
+    document.getElementById('cronsRuntimeCount').textContent = runCrons.length;
+    document.getElementById('cronsPersistedCount').textContent = persisted.length;
+
+    if (!runCrons.length) {
+      runtimeEl.innerHTML = '<div style="padding:14px;border-radius:10px;border:1px solid rgba(245,158,11,0.25);background:rgba(245,158,11,0.05);color:#f59e0b;font-size:12px">⚠️ Sin snapshot. Claude todavía no hizo POST /cron/active en esta sesión. Pedile que lo sincronice.</div>';
+    } else {
+      runtimeEl.innerHTML = runCrons.map(c => {
+        const next = cronNext(c.cron_expr, new Date());
+        return `<div class="cron-row" data-expr="${escapeHtml(c.cron_expr)}" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(52,211,153,0.2);background:rgba(52,211,153,0.04)">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+            <div style="flex:1;min-width:180px">
+              <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(c.label || c.job_id)}</div>
+              <div style="font-family:monospace;font-size:10px;color:#64748b;margin-top:2px">${escapeHtml(c.cron_expr || '')} · ${c.job_id}</div>
+            </div>
+            <div style="text-align:right">
+              <div class="cron-countdown" style="font-size:14px;font-weight:700;color:#34d399;font-family:monospace">${next ? formatCountdown(next - Date.now()) : '—'}</div>
+              <div class="cron-nexttime" style="font-size:10px;color:#64748b">${next ? next.toLocaleString('es-UY', {month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : ''}</div>
+            </div>
+          </div>
+          ${c.prompt_preview ? `<div style="font-size:11px;color:#94a3b8;margin-top:6px;max-height:40px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(c.prompt_preview.slice(0,140))}</div>` : ''}
+        </div>`;
+      }).join('');
+    }
+
+    if (!persisted.length) {
+      persistedEl.innerHTML = '<div style="color:#64748b;font-size:12px">cron-prompts.md no encontrado en disco.</div>';
+    } else {
+      persistedEl.innerHTML = persisted.map(s => {
+        const next = s.cron_expr ? cronNext(s.cron_expr, new Date()) : null;
+        const inRuntime = runCrons.some(c => (c.cron_expr||'').trim() === (s.cron_expr||'').trim());
+        const color = inRuntime ? '#94a3b8' : '#ef4444';
+        const label = inRuntime ? 'sincronizado' : '⚠ no corriendo';
+        return `<div style="padding:10px 12px;border-radius:10px;border:1px solid rgba(148,163,184,0.15);background:rgba(148,163,184,0.03)">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
+            <div style="flex:1;min-width:180px">
+              <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(s.title || '—')}</div>
+              <div style="font-family:monospace;font-size:10px;color:#64748b;margin-top:2px">${escapeHtml(s.cron_expr || '—')}</div>
+            </div>
+            <span style="font-size:10px;color:${color};background:${color}1a;padding:2px 8px;border-radius:6px;white-space:nowrap">${label}</span>
+          </div>
+          ${next ? `<div style="font-size:10px;color:#64748b;margin-top:4px">próximo: ${next.toLocaleString('es-UY', {month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
+        </div>`;
+      }).join('');
+    }
+
+    if (_cronsInterval) clearInterval(_cronsInterval);
+    _cronsInterval = setInterval(() => {
+      if (document.getElementById('cronsPanel').style.display !== 'block') {
+        clearInterval(_cronsInterval); _cronsInterval = null; return;
+      }
+      document.getElementById('cronsClock').textContent = 'ahora: ' + new Date().toLocaleTimeString('es-UY');
+      document.querySelectorAll('.cron-row').forEach(row => {
+        const expr = row.dataset.expr;
+        const next = cronNext(expr, new Date());
+        const cd = row.querySelector('.cron-countdown');
+        if (cd && next) cd.textContent = formatCountdown(next - Date.now());
+      });
+    }, 1000);
+  } catch (e) {
+    runtimeEl.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`;
+  }
+}
 
 // Track actual topbar height so panels never overlap on mobile wrap
 function _syncTopbarHeight() {
@@ -1822,7 +1971,7 @@ async function renderMetrics() {
 
 // Restore tab from hash (after all data is defined)
 const hashTab = location.hash.replace('#','');
-if (['logs','graph','arch','rag','brain'].includes(hashTab)) switchTab(hashTab);
+if (['logs','graph','arch','rag','brain','crons'].includes(hashTab)) switchTab(hashTab);
 </script>
 </body>
 </html>

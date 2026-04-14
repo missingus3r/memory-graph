@@ -75,6 +75,9 @@ Endpoints:
   GET  /metric/list?name=&limit=
   GET  /metric/summary
   POST /worldmodel/<id>/promote  (promote soft observation → wm_event/relation/prediction)
+  POST /cron/active              (bulk replace snapshot of currently-scheduled crons)
+  GET  /cron/active
+  GET  /cron/prompts             (reads ~/.claude/cron-prompts.md, returns parsed sections)
 
 Table ownership notes (see split in CLAUDE.md / Self-Improving Harness):
   - entities        → IDENTITY layer: who/what things ARE (Bruno, gmail,
@@ -107,7 +110,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.3.1"
+VERSION = "2.4.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -258,6 +261,15 @@ def init_db():
             confidence REAL DEFAULT 0.5, occurrences INTEGER DEFAULT 1,
             first_seen TEXT, last_seen TEXT, expires_at TEXT,
             created_at TEXT, updated_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS active_crons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT UNIQUE,
+            label TEXT,
+            cron_expr TEXT,
+            prompt_preview TEXT,
+            registered_at TEXT,
+            updated_at TEXT
         )""",
         """CREATE TABLE IF NOT EXISTS experiments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3316,6 +3328,91 @@ def metric_summary():
         })
     out.sort(key=lambda x: x["name"])
     return jsonify({"count": len(out), "known_catalog": sorted(_KNOWN_METRICS), "metrics": out})
+
+
+# -- Active Crons snapshot --
+
+@app.route("/cron/active", methods=["POST"])
+def cron_active_upsert():
+    """Replace the snapshot of currently scheduled crons.
+    Body: {crons: [{job_id, label, cron_expr, prompt_preview?}]}
+    Any job_id not present in the payload is removed from the snapshot."""
+    db = get_db()
+    data = request.json or {}
+    items = data.get("crons") or []
+    ts = now_iso()
+    seen = set()
+    for c in items:
+        jid = (c.get("job_id") or "").strip()
+        if not jid:
+            continue
+        seen.add(jid)
+        row = {
+            "job_id": jid,
+            "label": c.get("label", ""),
+            "cron_expr": c.get("cron_expr", ""),
+            "prompt_preview": (c.get("prompt_preview") or "")[:500],
+            "registered_at": c.get("registered_at", ts),
+            "updated_at": ts,
+        }
+        existing = db.execute("SELECT id FROM active_crons WHERE job_id = ?", [jid]).fetchone()
+        if existing:
+            db.execute(
+                "UPDATE active_crons SET label = ?, cron_expr = ?, prompt_preview = ?, updated_at = ? WHERE job_id = ?",
+                [row["label"], row["cron_expr"], row["prompt_preview"], ts, jid])
+        else:
+            db["active_crons"].insert(row)
+    # Remove stale
+    all_jids = [r[0] for r in db.execute("SELECT job_id FROM active_crons").fetchall()]
+    for jid in all_jids:
+        if jid not in seen:
+            db.execute("DELETE FROM active_crons WHERE job_id = ?", [jid])
+    return jsonify({"status": "synced", "count": len(seen), "removed": len(all_jids) - len(seen & set(all_jids))})
+
+
+@app.route("/cron/active", methods=["GET"])
+def cron_active_list():
+    db = get_db()
+    rows = db.execute(
+        "SELECT job_id, label, cron_expr, prompt_preview, registered_at, updated_at FROM active_crons ORDER BY cron_expr"
+    ).fetchall()
+    results = [{"job_id": r[0], "label": r[1], "cron_expr": r[2],
+                "prompt_preview": r[3], "registered_at": r[4], "updated_at": r[5]} for r in rows]
+    return jsonify({"count": len(results), "crons": results})
+
+
+_CRON_PROMPTS_PATH = Path.home() / ".claude" / "cron-prompts.md"
+
+
+@app.route("/cron/prompts", methods=["GET"])
+def cron_prompts_read():
+    """Return ~/.claude/cron-prompts.md parsed into sections."""
+    if not _CRON_PROMPTS_PATH.exists():
+        return jsonify({"error": "cron-prompts.md not found", "path": str(_CRON_PROMPTS_PATH)}), 404
+    text = _CRON_PROMPTS_PATH.read_text()
+    sections = []
+    current = None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if current:
+                sections.append(current)
+            header = line[3:].strip()
+            cron_match = re.search(r"`([^`]+)`", header)
+            title = re.sub(r"—.*$", "", header).strip()
+            current = {
+                "title": title,
+                "header": header,
+                "cron_expr": cron_match.group(1) if cron_match else "",
+                "body": "",
+            }
+        elif current is not None and not line.startswith("#"):
+            current["body"] += line + "\n"
+    if current:
+        sections.append(current)
+    for s in sections:
+        s["body"] = s["body"].strip()
+    return jsonify({"count": len(sections), "path": str(_CRON_PROMPTS_PATH),
+                    "sections": sections})
 
 
 if __name__ == "__main__":
