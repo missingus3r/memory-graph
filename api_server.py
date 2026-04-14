@@ -31,6 +31,15 @@ Endpoints:
   DELETE /goal/<id>
   GET  /goal/active
   GET  /goal/next
+  POST /capability
+  GET  /capability/list
+  GET  /capability/<name>
+  PATCH /capability/<name>
+  POST /capability/<name>/record  (record run: success/failure/cost/time)
+  DELETE /capability/<name>
+  GET  /capability/can?domain=...&risk=...
+  GET  /autonomy/levels
+  POST /autonomy/check
 """
 
 import json
@@ -49,7 +58,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -167,6 +176,33 @@ def init_db():
             confidence REAL DEFAULT 0.5, occurrences INTEGER DEFAULT 1,
             first_seen TEXT, last_seen TEXT, expires_at TEXT,
             created_at TEXT, updated_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS capabilities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE,
+            domain TEXT,
+            description TEXT,
+            confidence REAL DEFAULT 0.5,
+            success_count INTEGER DEFAULT 0,
+            failure_count INTEGER DEFAULT 0,
+            cost_avg REAL DEFAULT 0.0,
+            time_avg_sec REAL DEFAULT 0.0,
+            error_types TEXT,
+            supervision_needed INTEGER DEFAULT 1,
+            autonomy_max INTEGER DEFAULT 0,
+            max_risk_tier TEXT DEFAULT 'low',
+            last_evaluated TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS autonomy_levels (
+            level INTEGER PRIMARY KEY,
+            name TEXT,
+            description TEXT,
+            max_risk_tier TEXT,
+            requires_checkpoint INTEGER DEFAULT 0,
+            requires_rollback INTEGER DEFAULT 0,
+            created_at TEXT
         )""",
         """CREATE TABLE IF NOT EXISTS goals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1672,8 +1708,325 @@ def goal_delete(goal_id):
     return jsonify({"status": "deleted", "goal_id": goal_id})
 
 
+# -- Autonomy Levels --
+
+_AUTONOMY_LEVELS = [
+    (0, "Suggest Only", "Sólo sugerir; ninguna ejecución real.", "any", 0, 0),
+    (1, "Sandbox", "Ejecuta únicamente en sandbox/dry-run.", "low", 0, 1),
+    (2, "Low-Risk Act", "Puede actuar en sistemas de bajo riesgo (lectura, logs, memoria propia).", "low", 0, 1),
+    (3, "Bounded Act", "Actúa con límites monetarios/temporales; cualquier coste requiere budget.", "medium", 1, 1),
+    (4, "Long Chain", "Cadenas largas con checkpoints; pausa ante señales inesperadas.", "medium", 1, 1),
+    (5, "Self-Modify", "Puede auto-modificar prompts/policies/skills en ramas aisladas con rollback obligatorio.", "high", 1, 1),
+]
+
+
+def _seed_autonomy_levels():
+    conn = sqlite3.connect(DB_PATH)
+    ts = now_iso()
+    for lvl, name, desc, risk, ckpt, rb in _AUTONOMY_LEVELS:
+        conn.execute(
+            "INSERT OR IGNORE INTO autonomy_levels (level, name, description, max_risk_tier, requires_checkpoint, requires_rollback, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [lvl, name, desc, risk, ckpt, rb, ts])
+    conn.commit()
+    conn.close()
+
+
+@app.route("/autonomy/levels", methods=["GET"])
+def autonomy_levels_list():
+    db = get_db()
+    rows = db.execute(
+        "SELECT level, name, description, max_risk_tier, requires_checkpoint, requires_rollback FROM autonomy_levels ORDER BY level"
+    ).fetchall()
+    results = [{"level": r[0], "name": r[1], "description": r[2], "max_risk_tier": r[3],
+                "requires_checkpoint": bool(r[4]), "requires_rollback": bool(r[5])} for r in rows]
+    return jsonify({"count": len(results), "levels": results})
+
+
+_RISK_ORDER = {"any": 0, "low": 1, "medium": 2, "high": 3}
+
+
+@app.route("/autonomy/check", methods=["POST"])
+def autonomy_check():
+    """Decide if an action is allowed. Body: {capability?, domain?, proposed_level, risk_tier}.
+    Returns {allowed: bool, reason, required_supervision, capability_autonomy_max}."""
+    db = get_db()
+    data = request.json or {}
+    cap_name = data.get("capability") or data.get("domain") or ""
+    proposed_level = safe_int(data.get("proposed_level", 0), default=0, min_val=0, max_val=5)
+    risk_tier = (data.get("risk_tier") or "low").lower()
+
+    lvl_row = db.execute(
+        "SELECT level, max_risk_tier, requires_checkpoint FROM autonomy_levels WHERE level = ?",
+        [proposed_level]).fetchone()
+    if not lvl_row:
+        return jsonify({"allowed": False, "reason": f"unknown autonomy level {proposed_level}"}), 400
+
+    level_risk = lvl_row[1]
+    risk_ok = _RISK_ORDER.get(risk_tier, 99) <= _RISK_ORDER.get(level_risk, 0)
+
+    cap_row = None
+    if cap_name:
+        cap_row = db.execute(
+            "SELECT name, confidence, autonomy_max, supervision_needed, max_risk_tier FROM capabilities WHERE name = ? OR domain = ?",
+            [cap_name, cap_name]).fetchone()
+
+    cap_ok = True
+    cap_reason = None
+    cap_autonomy_max = 5
+    supervision = False
+    if cap_row:
+        cap_autonomy_max = cap_row[2] or 0
+        supervision = bool(cap_row[3])
+        cap_ok = proposed_level <= cap_autonomy_max
+        if not cap_ok:
+            cap_reason = f"capability '{cap_row[0]}' is capped at autonomy L{cap_autonomy_max}"
+
+    allowed = risk_ok and cap_ok
+    reason = cap_reason or (None if allowed else f"risk {risk_tier} exceeds level L{proposed_level} max ({level_risk})")
+    return jsonify({
+        "allowed": allowed,
+        "reason": reason or "ok",
+        "required_supervision": supervision or proposed_level <= 1,
+        "capability_autonomy_max": cap_autonomy_max,
+        "proposed_level": proposed_level,
+        "risk_tier": risk_tier,
+    })
+
+
+# -- Capabilities --
+
+_DEFAULT_CAPABILITIES = [
+    ("coding", "engineering", "Write, edit, and debug code.", 0.65, 2, "medium"),
+    ("research", "information", "Gather and synthesize information from multiple sources.", 0.7, 2, "low"),
+    ("email_drafting", "communication", "Draft email messages for the user's review.", 0.6, 1, "low"),
+    ("scheduling", "planning", "Create and manage calendar events and crons.", 0.65, 2, "low"),
+    ("long_horizon_planning", "planning", "Decompose ambiguous goals into plans spanning days/weeks.", 0.4, 1, "medium"),
+    ("memory_recall", "memory", "Retrieve relevant context from the memory system.", 0.75, 3, "low"),
+    ("fact_reliability", "verification", "Judge whether a claim is supported by evidence.", 0.5, 1, "medium"),
+    ("multimodal_work", "perception", "Understand and act on images, audio, and mixed media.", 0.55, 1, "low"),
+    ("tool_use", "execution", "Select and invoke the right tool for a task.", 0.7, 2, "low"),
+    ("self_modification", "meta", "Propose changes to own prompts, skills, or code.", 0.3, 0, "high"),
+]
+
+
+def _seed_capabilities():
+    conn = sqlite3.connect(DB_PATH)
+    ts = now_iso()
+    for name, domain, desc, conf, autonomy_max, risk in _DEFAULT_CAPABILITIES:
+        conn.execute(
+            """INSERT OR IGNORE INTO capabilities
+               (name, domain, description, confidence, success_count, failure_count, cost_avg, time_avg_sec, error_types, supervision_needed, autonomy_max, max_risk_tier, last_evaluated, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 0, 0, 0.0, 0.0, '[]', 1, ?, ?, ?, ?, ?)""",
+            [name, domain, desc, conf, autonomy_max, risk, ts, ts, ts])
+    conn.commit()
+    conn.close()
+
+
+_CAP_COLUMNS = "id, name, domain, description, confidence, success_count, failure_count, cost_avg, time_avg_sec, error_types, supervision_needed, autonomy_max, max_risk_tier, last_evaluated, created_at, updated_at"
+
+
+def _cap_row_to_dict(r):
+    try:
+        errors = json.loads(r[9]) if r[9] else []
+    except Exception:
+        errors = []
+    total = (r[5] or 0) + (r[6] or 0)
+    success_rate = (r[5] / total) if total > 0 else None
+    return {
+        "id": r[0], "name": r[1], "domain": r[2], "description": r[3],
+        "confidence": r[4], "success_count": r[5], "failure_count": r[6],
+        "cost_avg": r[7], "time_avg_sec": r[8], "error_types": errors,
+        "supervision_needed": bool(r[10]), "autonomy_max": r[11],
+        "max_risk_tier": r[12], "last_evaluated": r[13],
+        "created_at": r[14], "updated_at": r[15],
+        "success_rate": success_rate,
+        "runs": total,
+    }
+
+
+@app.route("/capability", methods=["POST"])
+def capability_create():
+    db = get_db()
+    data = request.json or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name required"}), 400
+    ts = now_iso()
+    row = {
+        "name": name,
+        "domain": data.get("domain", ""),
+        "description": data.get("description", ""),
+        "confidence": clamp_float(data.get("confidence", 0.5), default=0.5),
+        "success_count": safe_int(data.get("success_count", 0), default=0, min_val=0, max_val=10**9),
+        "failure_count": safe_int(data.get("failure_count", 0), default=0, min_val=0, max_val=10**9),
+        "cost_avg": clamp_float(data.get("cost_avg", 0.0), default=0.0, lo=0.0, hi=10**6),
+        "time_avg_sec": clamp_float(data.get("time_avg_sec", 0.0), default=0.0, lo=0.0, hi=10**6),
+        "error_types": json.dumps(data.get("error_types", []), ensure_ascii=False),
+        "supervision_needed": 1 if data.get("supervision_needed", True) else 0,
+        "autonomy_max": safe_int(data.get("autonomy_max", 0), default=0, min_val=0, max_val=5),
+        "max_risk_tier": data.get("max_risk_tier", "low"),
+        "last_evaluated": ts,
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    try:
+        db["capabilities"].insert(row)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    created = db.execute(f"SELECT {_CAP_COLUMNS} FROM capabilities WHERE name = ?", [name]).fetchone()
+    return jsonify({"status": "created", "capability": _cap_row_to_dict(created)})
+
+
+@app.route("/capability/list", methods=["GET"])
+def capability_list():
+    db = get_db()
+    domain = request.args.get("domain", "")
+    limit = safe_int(request.args.get("limit"), default=100, max_val=500)
+    if domain:
+        rows = db.execute(
+            f"SELECT {_CAP_COLUMNS} FROM capabilities WHERE domain = ? ORDER BY confidence DESC LIMIT ?",
+            [domain, limit]).fetchall()
+    else:
+        rows = db.execute(
+            f"SELECT {_CAP_COLUMNS} FROM capabilities ORDER BY domain, confidence DESC LIMIT ?",
+            [limit]).fetchall()
+    results = [_cap_row_to_dict(r) for r in rows]
+    return jsonify({"count": len(results), "capabilities": results})
+
+
+@app.route("/capability/can", methods=["GET"])
+def capability_can():
+    """Can capability do a task of given risk? Returns decision + calibrated confidence.
+    Query: ?domain=<name>&risk=<low|medium|high>"""
+    db = get_db()
+    name = request.args.get("domain") or request.args.get("name") or ""
+    risk = (request.args.get("risk") or "low").lower()
+    row = db.execute(
+        f"SELECT {_CAP_COLUMNS} FROM capabilities WHERE name = ? OR domain = ? ORDER BY confidence DESC LIMIT 1",
+        [name, name]).fetchone()
+    if not row:
+        return jsonify({"allowed": False, "reason": f"no capability for '{name}'", "confidence": None}), 404
+    cap = _cap_row_to_dict(row)
+    risk_ok = _RISK_ORDER.get(risk, 99) <= _RISK_ORDER.get(cap["max_risk_tier"], 0)
+    conf_threshold = 0.7 if risk == "high" else (0.55 if risk == "medium" else 0.4)
+    conf_ok = cap["confidence"] >= conf_threshold
+    allowed = risk_ok and conf_ok
+    reason = "ok" if allowed else (
+        f"risk {risk} exceeds capability max ({cap['max_risk_tier']})" if not risk_ok
+        else f"confidence {cap['confidence']:.2f} below threshold {conf_threshold} for risk {risk}"
+    )
+    return jsonify({
+        "allowed": allowed,
+        "reason": reason,
+        "confidence": cap["confidence"],
+        "success_rate": cap["success_rate"],
+        "autonomy_max": cap["autonomy_max"],
+        "supervision_needed": cap["supervision_needed"],
+    })
+
+
+@app.route("/capability/<name>", methods=["GET"])
+def capability_get(name):
+    db = get_db()
+    row = db.execute(f"SELECT {_CAP_COLUMNS} FROM capabilities WHERE name = ?", [name]).fetchone()
+    if not row:
+        return jsonify({"error": f"Capability '{name}' not found"}), 404
+    return jsonify({"capability": _cap_row_to_dict(row)})
+
+
+@app.route("/capability/<name>", methods=["PATCH"])
+def capability_update(name):
+    db = get_db()
+    existing = db.execute("SELECT id FROM capabilities WHERE name = ?", [name]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Capability '{name}' not found"}), 404
+    data = request.json or {}
+    updatable = {"domain", "description", "confidence", "cost_avg", "time_avg_sec",
+                 "error_types", "supervision_needed", "autonomy_max", "max_risk_tier"}
+    sets = []
+    vals = []
+    for k, v in data.items():
+        if k not in updatable:
+            continue
+        if k == "confidence":
+            v = clamp_float(v, default=0.5)
+        elif k == "autonomy_max":
+            v = safe_int(v, default=0, min_val=0, max_val=5)
+        elif k == "supervision_needed":
+            v = 1 if v else 0
+        elif k == "error_types" and not isinstance(v, str):
+            v = json.dumps(v, ensure_ascii=False)
+        sets.append(f"{k} = ?")
+        vals.append(v)
+    if not sets:
+        return jsonify({"error": "no updatable fields provided"}), 400
+    sets.append("updated_at = ?")
+    vals.append(now_iso())
+    vals.append(name)
+    db.execute(f"UPDATE capabilities SET {', '.join(sets)} WHERE name = ?", vals)
+    row = db.execute(f"SELECT {_CAP_COLUMNS} FROM capabilities WHERE name = ?", [name]).fetchone()
+    return jsonify({"status": "updated", "capability": _cap_row_to_dict(row)})
+
+
+@app.route("/capability/<name>/record", methods=["POST"])
+def capability_record(name):
+    """Record a run outcome. Body: {outcome: 'success'|'failure', cost?, time_sec?, error_type?}"""
+    db = get_db()
+    row = db.execute(f"SELECT {_CAP_COLUMNS} FROM capabilities WHERE name = ?", [name]).fetchone()
+    if not row:
+        return jsonify({"error": f"Capability '{name}' not found"}), 404
+    cap = _cap_row_to_dict(row)
+    data = request.json or {}
+    outcome = (data.get("outcome") or "").lower()
+    if outcome not in ("success", "failure"):
+        return jsonify({"error": "outcome must be 'success' or 'failure'"}), 400
+    cost = float(data.get("cost", 0.0) or 0.0)
+    time_sec = float(data.get("time_sec", 0.0) or 0.0)
+    error_type = (data.get("error_type") or "").strip() if outcome == "failure" else None
+
+    new_success = cap["success_count"] + (1 if outcome == "success" else 0)
+    new_failure = cap["failure_count"] + (1 if outcome == "failure" else 0)
+    total = new_success + new_failure
+
+    # Rolling averages
+    prev_total = cap["runs"]
+    new_cost_avg = ((cap["cost_avg"] * prev_total) + cost) / total if total else 0.0
+    new_time_avg = ((cap["time_avg_sec"] * prev_total) + time_sec) / total if total else 0.0
+
+    # Calibrated confidence: blend prior (0.5) with observed success rate, weighted by runs
+    prior = 0.5
+    prior_weight = 5.0  # pseudo-count
+    observed_rate = new_success / total if total else prior
+    new_conf = (prior * prior_weight + observed_rate * total) / (prior_weight + total)
+
+    error_types = cap["error_types"] or []
+    if error_type:
+        error_types = (error_types + [error_type])[-20:]
+
+    ts = now_iso()
+    db.execute(
+        """UPDATE capabilities SET success_count = ?, failure_count = ?, cost_avg = ?, time_avg_sec = ?,
+           confidence = ?, error_types = ?, last_evaluated = ?, updated_at = ? WHERE name = ?""",
+        [new_success, new_failure, new_cost_avg, new_time_avg, new_conf,
+         json.dumps(error_types, ensure_ascii=False), ts, ts, name])
+    updated = db.execute(f"SELECT {_CAP_COLUMNS} FROM capabilities WHERE name = ?", [name]).fetchone()
+    return jsonify({"status": "recorded", "capability": _cap_row_to_dict(updated)})
+
+
+@app.route("/capability/<name>", methods=["DELETE"])
+def capability_delete(name):
+    db = get_db()
+    existing = db.execute("SELECT id FROM capabilities WHERE name = ?", [name]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Capability '{name}' not found"}), 404
+    db.execute("DELETE FROM capabilities WHERE name = ?", [name])
+    return jsonify({"status": "deleted", "name": name})
+
+
 if __name__ == "__main__":
     init_db()
     init_embeddings_table()
     _seed_keywords()
+    _seed_autonomy_levels()
+    _seed_capabilities()
     app.run(host="0.0.0.0", port=PORT)
