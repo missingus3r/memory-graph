@@ -40,6 +40,40 @@ Endpoints:
   GET  /capability/can?domain=...&risk=...
   GET  /autonomy/levels
   POST /autonomy/check
+  GET  /memory/episodic?limit=&hours=
+  GET  /memory/semantic?type=&limit=
+  GET  /memory/procedural?limit=
+  POST /memory/<id>/verify
+  POST /memory/decay   (apply confidence decay pass)
+  POST /plan
+  GET  /plan/<plan_id>
+  GET  /plan/list?goal_id=
+  POST /plan/<plan_id>/node
+  PATCH /plan/node/<node_id>
+  DELETE /plan/<plan_id>
+  POST /wm/entity
+  GET  /wm/entity/list
+  POST /wm/relation
+  GET  /wm/relation/list
+  POST /wm/event
+  GET  /wm/event/list
+  POST /wm/prediction
+  GET  /wm/prediction/list
+  PATCH /wm/prediction/<id>/resolve
+  POST /verify
+  GET  /verify/list?subject_type=&subject_id=
+  POST /sandbox/execute    (dry-run | simulation | live)
+  GET  /sandbox/list
+  POST /skill/<id>/record  (record execution outcome)
+  PATCH /skill/<id>/promote (maturity: draft→beta→stable)
+  POST /experiment
+  GET  /experiment/list?status=
+  POST /experiment/<id>/variant
+  POST /experiment/<id>/observation
+  PATCH /experiment/<id>/conclude
+  POST /metric
+  GET  /metric/list?name=&limit=
+  GET  /metric/summary
 """
 
 import json
@@ -58,7 +92,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "1.6.0"
+VERSION = "2.0.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -110,6 +144,36 @@ def init_db():
         conn.execute("ALTER TABLE conversations ADD COLUMN importance REAL DEFAULT 0.4")
     except Exception:
         pass  # Column already exists
+
+    # Three-layer memory migrations (additive on existing tables)
+    for mig in [
+        "ALTER TABLE memories ADD COLUMN layer TEXT DEFAULT 'semantic'",
+        "ALTER TABLE memories ADD COLUMN provenance TEXT DEFAULT '[]'",
+        "ALTER TABLE memories ADD COLUMN confidence REAL DEFAULT 0.8",
+        "ALTER TABLE memories ADD COLUMN last_verified TEXT",
+        "ALTER TABLE memories ADD COLUMN decay_rate REAL DEFAULT 0.01",
+        "ALTER TABLE entities ADD COLUMN provenance TEXT DEFAULT '[]'",
+        "ALTER TABLE entities ADD COLUMN confidence REAL DEFAULT 0.8",
+        "ALTER TABLE entities ADD COLUMN last_verified TEXT",
+        "ALTER TABLE skills ADD COLUMN preconditions TEXT DEFAULT '[]'",
+        "ALTER TABLE skills ADD COLUMN tools_needed TEXT DEFAULT '[]'",
+        "ALTER TABLE skills ADD COLUMN success_count INTEGER DEFAULT 0",
+        "ALTER TABLE skills ADD COLUMN failure_count INTEGER DEFAULT 0",
+        "ALTER TABLE skills ADD COLUMN cost_avg REAL DEFAULT 0.0",
+        "ALTER TABLE skills ADD COLUMN time_avg_sec REAL DEFAULT 0.0",
+        "ALTER TABLE skills ADD COLUMN failure_domains TEXT DEFAULT '[]'",
+        "ALTER TABLE skills ADD COLUMN tests TEXT DEFAULT '[]'",
+        "ALTER TABLE skills ADD COLUMN maturity TEXT DEFAULT 'draft'",
+        "ALTER TABLE skills ADD COLUMN examples TEXT DEFAULT '[]'",
+        "ALTER TABLE insights ADD COLUMN provenance TEXT DEFAULT '[]'",
+        "ALTER TABLE insights ADD COLUMN last_verified TEXT",
+        "ALTER TABLE world_model ADD COLUMN provenance TEXT DEFAULT '[]'",
+        "ALTER TABLE world_model ADD COLUMN last_verified TEXT",
+    ]:
+        try:
+            conn.execute(mig)
+        except Exception:
+            pass  # Already applied
 
     if "conversations_fts" not in db.table_names():
         db.executescript("""
@@ -176,6 +240,134 @@ def init_db():
             confidence REAL DEFAULT 0.5, occurrences INTEGER DEFAULT 1,
             first_seen TEXT, last_seen TEXT, expires_at TEXT,
             created_at TEXT, updated_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS experiments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            experiment_id TEXT UNIQUE,
+            hypothesis TEXT,
+            context TEXT,
+            metric TEXT,
+            min_delta REAL DEFAULT 0.05,
+            min_samples INTEGER DEFAULT 10,
+            variants TEXT,
+            observations TEXT,
+            status TEXT DEFAULT 'running',
+            winner TEXT,
+            conclusion TEXT,
+            started_at TEXT,
+            concluded_at TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            value REAL,
+            unit TEXT,
+            context TEXT,
+            tags TEXT,
+            timestamp TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS verifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject_type TEXT,
+            subject_id TEXT,
+            check_type TEXT,
+            passed INTEGER DEFAULT 0,
+            confidence REAL DEFAULT 0.5,
+            reason TEXT,
+            evidence TEXT,
+            sources TEXT,
+            halluc_risk REAL DEFAULT 0.0,
+            required_evidence INTEGER DEFAULT 0,
+            created_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS sandbox_executions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            execution_id TEXT UNIQUE,
+            mode TEXT,
+            plan_id TEXT,
+            goal_id TEXT,
+            skill_id INTEGER,
+            action TEXT,
+            input TEXT,
+            simulated_output TEXT,
+            predicted_cost REAL,
+            predicted_time_sec REAL,
+            verdict TEXT,
+            promoted_to_live INTEGER DEFAULT 0,
+            created_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS plan_tree (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id TEXT,
+            node_id TEXT UNIQUE,
+            parent_node TEXT,
+            goal_id TEXT,
+            node_type TEXT,
+            title TEXT,
+            description TEXT,
+            tool TEXT,
+            expected_result TEXT,
+            exit_condition TEXT,
+            rollback TEXT,
+            status TEXT DEFAULT 'pending',
+            depth INTEGER DEFAULT 0,
+            order_idx INTEGER DEFAULT 0,
+            result TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS wm_entities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_key TEXT UNIQUE,
+            name TEXT,
+            type TEXT,
+            state TEXT,
+            attributes TEXT,
+            confidence REAL DEFAULT 0.7,
+            last_verified TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS wm_relations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject TEXT,
+            predicate TEXT,
+            object TEXT,
+            confidence REAL DEFAULT 0.6,
+            evidence TEXT,
+            provenance TEXT,
+            last_verified TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            UNIQUE(subject, predicate, object)
+        )""",
+        """CREATE TABLE IF NOT EXISTS wm_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT,
+            actor TEXT,
+            target TEXT,
+            payload TEXT,
+            causes TEXT,
+            effects TEXT,
+            occurred_at TEXT,
+            created_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS wm_predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hypothesis TEXT,
+            condition TEXT,
+            predicted_outcome TEXT,
+            counterfactual TEXT,
+            confidence REAL DEFAULT 0.5,
+            due_at TEXT,
+            resolved INTEGER DEFAULT 0,
+            actual_outcome TEXT,
+            resolved_at TEXT,
+            calibration REAL,
+            created_at TEXT,
+            updated_at TEXT
         )""",
         """CREATE TABLE IF NOT EXISTS capabilities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1708,6 +1900,155 @@ def goal_delete(goal_id):
     return jsonify({"status": "deleted", "goal_id": goal_id})
 
 
+# -- Three-layer memory --
+
+@app.route("/memory/episodic", methods=["GET"])
+def memory_episodic():
+    """Episodic memory: what happened, when, with what outcome.
+    Pulls from conversations + world_model events."""
+    db = get_db()
+    hours = safe_int(request.args.get("hours"), default=72, max_val=8760)
+    limit = safe_int(request.args.get("limit"), default=100, max_val=1000)
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
+    rows = db.execute(
+        "SELECT id, timestamp, role, channel, content, importance FROM conversations WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
+        [cutoff, limit]).fetchall()
+    events = [{"id": r[0], "timestamp": r[1], "role": r[2], "channel": r[3],
+               "content": r[4][:500], "importance": r[5], "layer": "episodic", "source": "conversation"} for r in rows]
+    wm_rows = db.execute(
+        "SELECT id, category, pattern, first_seen, last_seen, confidence FROM world_model WHERE last_seen >= ? ORDER BY last_seen DESC LIMIT ?",
+        [cutoff, limit]).fetchall()
+    for r in wm_rows:
+        events.append({"id": r[0], "timestamp": r[4], "category": r[1], "pattern": r[2],
+                       "first_seen": r[3], "confidence": r[5], "layer": "episodic", "source": "world_model"})
+    events.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return jsonify({"count": len(events), "hours": hours, "events": events[:limit]})
+
+
+@app.route("/memory/semantic", methods=["GET"])
+def memory_semantic():
+    """Semantic memory: stable facts, concepts, relations.
+    Combines memories (layer=semantic) + entities."""
+    db = get_db()
+    mtype = request.args.get("type", "")
+    limit = safe_int(request.args.get("limit"), default=100, max_val=1000)
+    if mtype:
+        mem_rows = db.execute(
+            "SELECT id, type, name, description, content, confidence, provenance, last_verified, updated_at FROM memories WHERE type = ? AND (layer = 'semantic' OR layer IS NULL) ORDER BY updated_at DESC LIMIT ?",
+            [mtype, limit]).fetchall()
+    else:
+        mem_rows = db.execute(
+            "SELECT id, type, name, description, content, confidence, provenance, last_verified, updated_at FROM memories WHERE (layer = 'semantic' OR layer IS NULL) ORDER BY updated_at DESC LIMIT ?",
+            [limit]).fetchall()
+    memories = [{"id": r[0], "type": r[1], "name": r[2], "description": r[3],
+                 "content": r[4], "confidence": r[5] or 0.8,
+                 "provenance": _safe_json(r[6], []),
+                 "last_verified": r[7], "updated_at": r[8], "layer": "semantic", "source": "memory"} for r in mem_rows]
+    ent_rows = db.execute(
+        "SELECT id, name, type, details, confidence, provenance, last_verified, updated_at FROM entities ORDER BY updated_at DESC LIMIT ?",
+        [limit]).fetchall()
+    entities = [{"id": r[0], "name": r[1], "type": r[2], "details": r[3],
+                 "confidence": r[4] or 0.8,
+                 "provenance": _safe_json(r[5], []),
+                 "last_verified": r[6], "updated_at": r[7], "layer": "semantic", "source": "entity"} for r in ent_rows]
+    return jsonify({"count": len(memories) + len(entities), "memories": memories, "entities": entities})
+
+
+@app.route("/memory/procedural", methods=["GET"])
+def memory_procedural():
+    """Procedural memory: skills, playbooks, heuristics."""
+    db = get_db()
+    limit = safe_int(request.args.get("limit"), default=100, max_val=500)
+    rows = db.execute(
+        "SELECT id, name, trigger_pattern, description, steps, preconditions, tools_needed, success_count, failure_count, cost_avg, time_avg_sec, failure_domains, maturity, times_used, last_used, created_at FROM skills ORDER BY times_used DESC, created_at DESC LIMIT ?",
+        [limit]).fetchall()
+    skills = []
+    for r in rows:
+        total = (r[7] or 0) + (r[8] or 0)
+        sr = (r[7] / total) if total > 0 else None
+        skills.append({
+            "id": r[0], "name": r[1], "trigger_pattern": r[2], "description": r[3],
+            "steps": _safe_json(r[4], []), "preconditions": _safe_json(r[5], []),
+            "tools_needed": _safe_json(r[6], []),
+            "success_count": r[7] or 0, "failure_count": r[8] or 0,
+            "success_rate": sr,
+            "cost_avg": r[9] or 0.0, "time_avg_sec": r[10] or 0.0,
+            "failure_domains": _safe_json(r[11], []),
+            "maturity": r[12] or "draft",
+            "times_used": r[13] or 0, "last_used": r[14], "created_at": r[15],
+            "layer": "procedural", "source": "skill",
+        })
+    return jsonify({"count": len(skills), "skills": skills})
+
+
+def _safe_json(s, default):
+    if not s:
+        return default
+    try:
+        return json.loads(s)
+    except Exception:
+        return default
+
+
+@app.route("/memory/<int:mem_id>/verify", methods=["POST"])
+def memory_verify(mem_id):
+    """Mark a memory as re-verified (resets decay). Body optional: {boost: 0.1}"""
+    db = get_db()
+    row = db.execute("SELECT id, confidence FROM memories WHERE id = ?", [mem_id]).fetchone()
+    if not row:
+        return jsonify({"error": f"Memory {mem_id} not found"}), 404
+    data = request.json or {}
+    boost = clamp_float(data.get("boost", 0.1), default=0.1, lo=0.0, hi=0.5)
+    new_conf = min(1.0, (row[1] or 0.8) + boost)
+    ts = now_iso()
+    db.execute("UPDATE memories SET confidence = ?, last_verified = ?, updated_at = ? WHERE id = ?",
+               [new_conf, ts, ts, mem_id])
+    return jsonify({"status": "verified", "id": mem_id, "confidence": new_conf, "last_verified": ts})
+
+
+@app.route("/memory/decay", methods=["POST"])
+def memory_decay():
+    """Apply confidence decay across memories, entities, world_model based on age.
+    Body optional: {halflife_days: 60}"""
+    db = get_db()
+    data = request.json or {}
+    halflife_days = float(data.get("halflife_days", 60.0) or 60.0)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    decayed = {"memories": 0, "entities": 0, "world_model": 0}
+
+    def _decay_table(table, id_col, conf_col, verified_col, fallback_col):
+        rows = db.execute(
+            f"SELECT {id_col}, {conf_col}, {verified_col}, {fallback_col} FROM {table}"
+        ).fetchall()
+        changed = 0
+        for r in rows:
+            ref_ts = r[2] or r[3]
+            if not ref_ts:
+                continue
+            try:
+                ts = datetime.datetime.fromisoformat(ref_ts.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=datetime.timezone.utc)
+                age_days = (now - ts).total_seconds() / 86400.0
+                if age_days <= halflife_days:
+                    continue
+                old_conf = r[1] or 0.8
+                factor = 0.5 ** ((age_days - halflife_days) / halflife_days)
+                new_conf = max(0.05, old_conf * factor)
+                if abs(new_conf - old_conf) >= 0.01:
+                    db.execute(f"UPDATE {table} SET {conf_col} = ? WHERE {id_col} = ?",
+                               [new_conf, r[0]])
+                    changed += 1
+            except Exception:
+                continue
+        return changed
+
+    decayed["memories"] = _decay_table("memories", "id", "confidence", "last_verified", "updated_at")
+    decayed["entities"] = _decay_table("entities", "id", "confidence", "last_verified", "updated_at")
+    decayed["world_model"] = _decay_table("world_model", "id", "confidence", "last_verified", "last_seen")
+    return jsonify({"status": "decayed", "halflife_days": halflife_days, "changes": decayed})
+
+
 # -- Autonomy Levels --
 
 _AUTONOMY_LEVELS = [
@@ -2021,6 +2362,833 @@ def capability_delete(name):
         return jsonify({"error": f"Capability '{name}' not found"}), 404
     db.execute("DELETE FROM capabilities WHERE name = ?", [name])
     return jsonify({"status": "deleted", "name": name})
+
+
+# -- Hierarchical Planner --
+
+def _plan_node_row_to_dict(r):
+    return {
+        "id": r[0], "plan_id": r[1], "node_id": r[2], "parent_node": r[3],
+        "goal_id": r[4], "node_type": r[5], "title": r[6], "description": r[7],
+        "tool": r[8], "expected_result": r[9], "exit_condition": r[10],
+        "rollback": r[11], "status": r[12], "depth": r[13], "order_idx": r[14],
+        "result": r[15], "created_at": r[16], "updated_at": r[17],
+    }
+
+
+_PLAN_NODE_COLS = "id, plan_id, node_id, parent_node, goal_id, node_type, title, description, tool, expected_result, exit_condition, rollback, status, depth, order_idx, result, created_at, updated_at"
+
+
+@app.route("/plan", methods=["POST"])
+def plan_create():
+    """Create a new plan root node. Body: {goal_id?, title, description?, tool?, expected_result?, exit_condition?, rollback?}"""
+    db = get_db()
+    data = request.json or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    ts = now_iso()
+    plan_id = data.get("plan_id") or f"p_{uuid.uuid4().hex[:8]}"
+    node_id = f"{plan_id}_root"
+    row = {
+        "plan_id": plan_id,
+        "node_id": node_id,
+        "parent_node": "",
+        "goal_id": data.get("goal_id", ""),
+        "node_type": "goal",
+        "title": title,
+        "description": data.get("description", ""),
+        "tool": data.get("tool", ""),
+        "expected_result": data.get("expected_result", ""),
+        "exit_condition": data.get("exit_condition", ""),
+        "rollback": data.get("rollback", ""),
+        "status": "pending",
+        "depth": 0,
+        "order_idx": 0,
+        "result": "",
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    db["plan_tree"].insert(row)
+    created = db.execute(f"SELECT {_PLAN_NODE_COLS} FROM plan_tree WHERE node_id = ?", [node_id]).fetchone()
+    return jsonify({"status": "created", "plan_id": plan_id, "root": _plan_node_row_to_dict(created)})
+
+
+@app.route("/plan/<plan_id>", methods=["GET"])
+def plan_get(plan_id):
+    db = get_db()
+    rows = db.execute(
+        f"SELECT {_PLAN_NODE_COLS} FROM plan_tree WHERE plan_id = ? ORDER BY depth, order_idx",
+        [plan_id]).fetchall()
+    if not rows:
+        return jsonify({"error": f"Plan {plan_id} not found"}), 404
+    nodes = [_plan_node_row_to_dict(r) for r in rows]
+    return jsonify({"plan_id": plan_id, "count": len(nodes), "nodes": nodes})
+
+
+@app.route("/plan/list", methods=["GET"])
+def plan_list():
+    db = get_db()
+    goal_id = request.args.get("goal_id", "")
+    limit = safe_int(request.args.get("limit"), default=50, max_val=500)
+    if goal_id:
+        rows = db.execute(
+            "SELECT DISTINCT plan_id, MAX(created_at) as cat FROM plan_tree WHERE goal_id = ? GROUP BY plan_id ORDER BY cat DESC LIMIT ?",
+            [goal_id, limit]).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT DISTINCT plan_id, MAX(created_at) as cat FROM plan_tree GROUP BY plan_id ORDER BY cat DESC LIMIT ?",
+            [limit]).fetchall()
+    plans = []
+    for r in rows:
+        pid = r[0]
+        root = db.execute(
+            "SELECT title, goal_id, status, depth FROM plan_tree WHERE plan_id = ? ORDER BY depth ASC LIMIT 1",
+            [pid]).fetchone()
+        cnt = db.execute("SELECT COUNT(*) FROM plan_tree WHERE plan_id = ?", [pid]).fetchone()[0]
+        plans.append({"plan_id": pid, "title": root[0] if root else "",
+                      "goal_id": root[1] if root else "",
+                      "root_status": root[2] if root else "", "nodes": cnt, "created_at": r[1]})
+    return jsonify({"count": len(plans), "plans": plans})
+
+
+@app.route("/plan/<plan_id>/node", methods=["POST"])
+def plan_add_node(plan_id):
+    """Add a child node. Body: {parent_node, node_type, title, description?, tool?, expected_result?, exit_condition?, rollback?, order_idx?}"""
+    db = get_db()
+    data = request.json or {}
+    parent_node = data.get("parent_node") or ""
+    if not parent_node:
+        return jsonify({"error": "parent_node required"}), 400
+    parent_row = db.execute(
+        "SELECT plan_id, depth, goal_id FROM plan_tree WHERE node_id = ?", [parent_node]).fetchone()
+    if not parent_row or parent_row[0] != plan_id:
+        return jsonify({"error": f"parent_node {parent_node} not in plan {plan_id}"}), 404
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    ts = now_iso()
+    node_id = f"{plan_id}_n{uuid.uuid4().hex[:6]}"
+    row = {
+        "plan_id": plan_id,
+        "node_id": node_id,
+        "parent_node": parent_node,
+        "goal_id": parent_row[2],
+        "node_type": data.get("node_type", "action"),
+        "title": title,
+        "description": data.get("description", ""),
+        "tool": data.get("tool", ""),
+        "expected_result": data.get("expected_result", ""),
+        "exit_condition": data.get("exit_condition", ""),
+        "rollback": data.get("rollback", ""),
+        "status": "pending",
+        "depth": parent_row[1] + 1,
+        "order_idx": safe_int(data.get("order_idx", 0), default=0, min_val=0, max_val=10000),
+        "result": "",
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    db["plan_tree"].insert(row)
+    created = db.execute(f"SELECT {_PLAN_NODE_COLS} FROM plan_tree WHERE node_id = ?", [node_id]).fetchone()
+    return jsonify({"status": "created", "node": _plan_node_row_to_dict(created)})
+
+
+@app.route("/plan/node/<node_id>", methods=["PATCH"])
+def plan_update_node(node_id):
+    db = get_db()
+    existing = db.execute("SELECT id FROM plan_tree WHERE node_id = ?", [node_id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Node {node_id} not found"}), 404
+    data = request.json or {}
+    updatable = {"title", "description", "tool", "expected_result", "exit_condition",
+                 "rollback", "status", "result", "order_idx"}
+    sets = []
+    vals = []
+    for k, v in data.items():
+        if k not in updatable:
+            continue
+        sets.append(f"{k} = ?")
+        vals.append(v)
+    if not sets:
+        return jsonify({"error": "no updatable fields"}), 400
+    sets.append("updated_at = ?")
+    vals.append(now_iso())
+    vals.append(node_id)
+    db.execute(f"UPDATE plan_tree SET {', '.join(sets)} WHERE node_id = ?", vals)
+    row = db.execute(f"SELECT {_PLAN_NODE_COLS} FROM plan_tree WHERE node_id = ?", [node_id]).fetchone()
+    return jsonify({"status": "updated", "node": _plan_node_row_to_dict(row)})
+
+
+@app.route("/plan/<plan_id>", methods=["DELETE"])
+def plan_delete(plan_id):
+    db = get_db()
+    deleted = db.execute("DELETE FROM plan_tree WHERE plan_id = ?", [plan_id]).rowcount
+    return jsonify({"status": "deleted", "plan_id": plan_id, "nodes_removed": deleted})
+
+
+# -- Structured World Model (entities / relations / events / predictions) --
+
+@app.route("/wm/entity", methods=["POST"])
+def wm_entity_create():
+    db = get_db()
+    data = request.json or {}
+    name = (data.get("name") or "").strip()
+    etype = (data.get("type") or "").strip()
+    if not name:
+        return jsonify({"error": "name required"}), 400
+    entity_key = data.get("entity_key") or f"{etype}:{name}".lower()
+    ts = now_iso()
+    attrs = data.get("attributes", {})
+    if not isinstance(attrs, str):
+        attrs = json.dumps(attrs, ensure_ascii=False)
+    existing = db.execute("SELECT id FROM wm_entities WHERE entity_key = ?", [entity_key]).fetchone()
+    if existing:
+        db.execute(
+            "UPDATE wm_entities SET name = ?, type = ?, state = ?, attributes = ?, confidence = ?, last_verified = ?, updated_at = ? WHERE entity_key = ?",
+            [name, etype, data.get("state", ""), attrs,
+             clamp_float(data.get("confidence", 0.7), default=0.7), ts, ts, entity_key])
+        return jsonify({"status": "updated", "entity_key": entity_key})
+    db["wm_entities"].insert({
+        "entity_key": entity_key, "name": name, "type": etype,
+        "state": data.get("state", ""), "attributes": attrs,
+        "confidence": clamp_float(data.get("confidence", 0.7), default=0.7),
+        "last_verified": ts, "created_at": ts, "updated_at": ts,
+    })
+    return jsonify({"status": "created", "entity_key": entity_key})
+
+
+@app.route("/wm/entity/list", methods=["GET"])
+def wm_entity_list():
+    db = get_db()
+    etype = request.args.get("type", "")
+    limit = safe_int(request.args.get("limit"), default=100, max_val=500)
+    if etype:
+        rows = db.execute(
+            "SELECT entity_key, name, type, state, attributes, confidence, last_verified, updated_at FROM wm_entities WHERE type = ? ORDER BY confidence DESC LIMIT ?",
+            [etype, limit]).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT entity_key, name, type, state, attributes, confidence, last_verified, updated_at FROM wm_entities ORDER BY updated_at DESC LIMIT ?",
+            [limit]).fetchall()
+    results = [{"entity_key": r[0], "name": r[1], "type": r[2], "state": r[3],
+                "attributes": _safe_json(r[4], {}), "confidence": r[5],
+                "last_verified": r[6], "updated_at": r[7]} for r in rows]
+    return jsonify({"count": len(results), "entities": results})
+
+
+@app.route("/wm/relation", methods=["POST"])
+def wm_relation_create():
+    db = get_db()
+    data = request.json or {}
+    subject = (data.get("subject") or "").strip()
+    predicate = (data.get("predicate") or "").strip()
+    obj = (data.get("object") or "").strip()
+    if not (subject and predicate and obj):
+        return jsonify({"error": "subject, predicate, object required"}), 400
+    ts = now_iso()
+    conf = clamp_float(data.get("confidence", 0.6), default=0.6)
+    evidence = data.get("evidence", "")
+    if not isinstance(evidence, str):
+        evidence = json.dumps(evidence, ensure_ascii=False)
+    prov = data.get("provenance", [])
+    if not isinstance(prov, str):
+        prov = json.dumps(prov, ensure_ascii=False)
+    existing = db.execute(
+        "SELECT id FROM wm_relations WHERE subject = ? AND predicate = ? AND object = ?",
+        [subject, predicate, obj]).fetchone()
+    if existing:
+        db.execute(
+            "UPDATE wm_relations SET confidence = ?, evidence = ?, provenance = ?, last_verified = ?, updated_at = ? WHERE id = ?",
+            [conf, evidence, prov, ts, ts, existing[0]])
+        return jsonify({"status": "updated", "id": existing[0]})
+    db["wm_relations"].insert({
+        "subject": subject, "predicate": predicate, "object": obj,
+        "confidence": conf, "evidence": evidence, "provenance": prov,
+        "last_verified": ts, "created_at": ts, "updated_at": ts,
+    })
+    return jsonify({"status": "created"})
+
+
+@app.route("/wm/relation/list", methods=["GET"])
+def wm_relation_list():
+    db = get_db()
+    subject = request.args.get("subject", "")
+    predicate = request.args.get("predicate", "")
+    limit = safe_int(request.args.get("limit"), default=100, max_val=500)
+    q = "SELECT id, subject, predicate, object, confidence, evidence, provenance, last_verified, updated_at FROM wm_relations WHERE 1=1"
+    args = []
+    if subject:
+        q += " AND subject = ?"
+        args.append(subject)
+    if predicate:
+        q += " AND predicate = ?"
+        args.append(predicate)
+    q += " ORDER BY confidence DESC LIMIT ?"
+    args.append(limit)
+    rows = db.execute(q, args).fetchall()
+    results = [{"id": r[0], "subject": r[1], "predicate": r[2], "object": r[3],
+                "confidence": r[4], "evidence": r[5],
+                "provenance": _safe_json(r[6], []),
+                "last_verified": r[7], "updated_at": r[8]} for r in rows]
+    return jsonify({"count": len(results), "relations": results})
+
+
+@app.route("/wm/event", methods=["POST"])
+def wm_event_create():
+    db = get_db()
+    data = request.json or {}
+    etype = (data.get("event_type") or "").strip()
+    if not etype:
+        return jsonify({"error": "event_type required"}), 400
+    ts = now_iso()
+    def _s(v):
+        return v if isinstance(v, str) else json.dumps(v or [], ensure_ascii=False)
+    db["wm_events"].insert({
+        "event_type": etype,
+        "actor": data.get("actor", ""),
+        "target": data.get("target", ""),
+        "payload": _s(data.get("payload", {})),
+        "causes": _s(data.get("causes", [])),
+        "effects": _s(data.get("effects", [])),
+        "occurred_at": data.get("occurred_at", ts),
+        "created_at": ts,
+    })
+    return jsonify({"status": "created"})
+
+
+@app.route("/wm/event/list", methods=["GET"])
+def wm_event_list():
+    db = get_db()
+    etype = request.args.get("event_type", "")
+    limit = safe_int(request.args.get("limit"), default=50, max_val=500)
+    if etype:
+        rows = db.execute(
+            "SELECT id, event_type, actor, target, payload, causes, effects, occurred_at, created_at FROM wm_events WHERE event_type = ? ORDER BY occurred_at DESC LIMIT ?",
+            [etype, limit]).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT id, event_type, actor, target, payload, causes, effects, occurred_at, created_at FROM wm_events ORDER BY occurred_at DESC LIMIT ?",
+            [limit]).fetchall()
+    results = [{"id": r[0], "event_type": r[1], "actor": r[2], "target": r[3],
+                "payload": _safe_json(r[4], {}),
+                "causes": _safe_json(r[5], []),
+                "effects": _safe_json(r[6], []),
+                "occurred_at": r[7], "created_at": r[8]} for r in rows]
+    return jsonify({"count": len(results), "events": results})
+
+
+@app.route("/wm/prediction", methods=["POST"])
+def wm_prediction_create():
+    """Create a testable prediction. Body: {hypothesis, condition, predicted_outcome, counterfactual?, confidence?, due_at?}"""
+    db = get_db()
+    data = request.json or {}
+    hypothesis = (data.get("hypothesis") or "").strip()
+    outcome = (data.get("predicted_outcome") or "").strip()
+    if not hypothesis or not outcome:
+        return jsonify({"error": "hypothesis and predicted_outcome required"}), 400
+    ts = now_iso()
+    db["wm_predictions"].insert({
+        "hypothesis": hypothesis,
+        "condition": data.get("condition", ""),
+        "predicted_outcome": outcome,
+        "counterfactual": data.get("counterfactual", ""),
+        "confidence": clamp_float(data.get("confidence", 0.5), default=0.5),
+        "due_at": data.get("due_at", ""),
+        "resolved": 0,
+        "actual_outcome": "",
+        "resolved_at": "",
+        "calibration": None,
+        "created_at": ts,
+        "updated_at": ts,
+    })
+    return jsonify({"status": "created"})
+
+
+@app.route("/wm/prediction/list", methods=["GET"])
+def wm_prediction_list():
+    db = get_db()
+    resolved = request.args.get("resolved", "")
+    limit = safe_int(request.args.get("limit"), default=50, max_val=500)
+    if resolved in ("1", "0"):
+        rows = db.execute(
+            "SELECT id, hypothesis, condition, predicted_outcome, counterfactual, confidence, due_at, resolved, actual_outcome, resolved_at, calibration, created_at FROM wm_predictions WHERE resolved = ? ORDER BY created_at DESC LIMIT ?",
+            [int(resolved), limit]).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT id, hypothesis, condition, predicted_outcome, counterfactual, confidence, due_at, resolved, actual_outcome, resolved_at, calibration, created_at FROM wm_predictions ORDER BY created_at DESC LIMIT ?",
+            [limit]).fetchall()
+    results = [{"id": r[0], "hypothesis": r[1], "condition": r[2],
+                "predicted_outcome": r[3], "counterfactual": r[4],
+                "confidence": r[5], "due_at": r[6], "resolved": bool(r[7]),
+                "actual_outcome": r[8], "resolved_at": r[9],
+                "calibration": r[10], "created_at": r[11]} for r in rows]
+    return jsonify({"count": len(results), "predictions": results})
+
+
+@app.route("/wm/prediction/<int:pred_id>/resolve", methods=["PATCH"])
+def wm_prediction_resolve(pred_id):
+    """Resolve a prediction. Body: {actual_outcome, correct: true/false}"""
+    db = get_db()
+    row = db.execute(
+        "SELECT id, confidence, predicted_outcome FROM wm_predictions WHERE id = ?",
+        [pred_id]).fetchone()
+    if not row:
+        return jsonify({"error": f"Prediction {pred_id} not found"}), 404
+    data = request.json or {}
+    actual = data.get("actual_outcome", "")
+    correct = bool(data.get("correct", False))
+    conf = row[1] or 0.5
+    calibration = (conf - (1.0 if correct else 0.0))  # Brier-like signed error
+    ts = now_iso()
+    db.execute(
+        "UPDATE wm_predictions SET resolved = 1, actual_outcome = ?, resolved_at = ?, calibration = ?, updated_at = ? WHERE id = ?",
+        [actual, ts, calibration, ts, pred_id])
+    return jsonify({"status": "resolved", "id": pred_id, "calibration_gap": calibration})
+
+
+# -- Verifier / Critic --
+
+_VALID_CHECK_TYPES = {"factual", "consistency", "goal_alignment", "hallucination", "uncertainty", "evidence"}
+
+
+@app.route("/verify", methods=["POST"])
+def verify_create():
+    """Record a verification. Body: {subject_type, subject_id, check_type, passed: bool,
+       confidence?, reason, evidence?, sources?, halluc_risk?, required_evidence?}"""
+    db = get_db()
+    data = request.json or {}
+    subject_type = (data.get("subject_type") or "").strip()
+    subject_id = str(data.get("subject_id") or "").strip()
+    check_type = (data.get("check_type") or "").strip()
+    if not (subject_type and subject_id and check_type):
+        return jsonify({"error": "subject_type, subject_id, check_type required"}), 400
+    if check_type not in _VALID_CHECK_TYPES:
+        return jsonify({"error": f"check_type must be one of {sorted(_VALID_CHECK_TYPES)}"}), 400
+    ts = now_iso()
+    def _s(v):
+        return v if isinstance(v, str) else json.dumps(v or [], ensure_ascii=False)
+    db["verifications"].insert({
+        "subject_type": subject_type,
+        "subject_id": subject_id,
+        "check_type": check_type,
+        "passed": 1 if data.get("passed") else 0,
+        "confidence": clamp_float(data.get("confidence", 0.5), default=0.5),
+        "reason": data.get("reason", ""),
+        "evidence": _s(data.get("evidence", "")),
+        "sources": _s(data.get("sources", [])),
+        "halluc_risk": clamp_float(data.get("halluc_risk", 0.0), default=0.0),
+        "required_evidence": 1 if data.get("required_evidence") else 0,
+        "created_at": ts,
+    })
+    return jsonify({"status": "recorded"})
+
+
+@app.route("/verify/list", methods=["GET"])
+def verify_list():
+    db = get_db()
+    subject_type = request.args.get("subject_type", "")
+    subject_id = request.args.get("subject_id", "")
+    limit = safe_int(request.args.get("limit"), default=50, max_val=500)
+    q = "SELECT id, subject_type, subject_id, check_type, passed, confidence, reason, evidence, sources, halluc_risk, required_evidence, created_at FROM verifications WHERE 1=1"
+    args = []
+    if subject_type:
+        q += " AND subject_type = ?"
+        args.append(subject_type)
+    if subject_id:
+        q += " AND subject_id = ?"
+        args.append(subject_id)
+    q += " ORDER BY created_at DESC LIMIT ?"
+    args.append(limit)
+    rows = db.execute(q, args).fetchall()
+    results = [{"id": r[0], "subject_type": r[1], "subject_id": r[2],
+                "check_type": r[3], "passed": bool(r[4]), "confidence": r[5],
+                "reason": r[6], "evidence": r[7],
+                "sources": _safe_json(r[8], []),
+                "halluc_risk": r[9], "required_evidence": bool(r[10]),
+                "created_at": r[11]} for r in rows]
+    return jsonify({"count": len(results), "verifications": results})
+
+
+# -- Sandbox --
+
+_VALID_SANDBOX_MODES = {"dry-run", "simulation", "live"}
+
+
+@app.route("/sandbox/execute", methods=["POST"])
+def sandbox_execute():
+    """Record a sandboxed execution. Body: {mode, action, input?, simulated_output?,
+       predicted_cost?, predicted_time_sec?, verdict?, plan_id?, goal_id?, skill_id?}"""
+    db = get_db()
+    data = request.json or {}
+    mode = (data.get("mode") or "").lower().strip()
+    if mode not in _VALID_SANDBOX_MODES:
+        return jsonify({"error": f"mode must be one of {sorted(_VALID_SANDBOX_MODES)}"}), 400
+    action = (data.get("action") or "").strip()
+    if not action:
+        return jsonify({"error": "action required"}), 400
+    ts = now_iso()
+    execution_id = data.get("execution_id") or f"x_{uuid.uuid4().hex[:8]}"
+    def _s(v):
+        return v if isinstance(v, str) else json.dumps(v or {}, ensure_ascii=False)
+    db["sandbox_executions"].insert({
+        "execution_id": execution_id,
+        "mode": mode,
+        "plan_id": data.get("plan_id", ""),
+        "goal_id": data.get("goal_id", ""),
+        "skill_id": safe_int(data.get("skill_id", 0), default=0, min_val=0, max_val=10**9),
+        "action": action,
+        "input": _s(data.get("input", {})),
+        "simulated_output": _s(data.get("simulated_output", {})),
+        "predicted_cost": clamp_float(data.get("predicted_cost", 0.0), default=0.0, lo=0.0, hi=10**6),
+        "predicted_time_sec": clamp_float(data.get("predicted_time_sec", 0.0), default=0.0, lo=0.0, hi=10**6),
+        "verdict": data.get("verdict", "pending"),
+        "promoted_to_live": 1 if data.get("promoted_to_live") else 0,
+        "created_at": ts,
+    })
+    return jsonify({"status": "recorded", "execution_id": execution_id, "mode": mode})
+
+
+@app.route("/sandbox/list", methods=["GET"])
+def sandbox_list():
+    db = get_db()
+    mode = request.args.get("mode", "")
+    limit = safe_int(request.args.get("limit"), default=50, max_val=500)
+    q = "SELECT id, execution_id, mode, plan_id, goal_id, skill_id, action, input, simulated_output, predicted_cost, predicted_time_sec, verdict, promoted_to_live, created_at FROM sandbox_executions WHERE 1=1"
+    args = []
+    if mode:
+        q += " AND mode = ?"
+        args.append(mode)
+    q += " ORDER BY created_at DESC LIMIT ?"
+    args.append(limit)
+    rows = db.execute(q, args).fetchall()
+    results = [{"id": r[0], "execution_id": r[1], "mode": r[2], "plan_id": r[3],
+                "goal_id": r[4], "skill_id": r[5], "action": r[6],
+                "input": _safe_json(r[7], {}),
+                "simulated_output": _safe_json(r[8], {}),
+                "predicted_cost": r[9], "predicted_time_sec": r[10],
+                "verdict": r[11], "promoted_to_live": bool(r[12]),
+                "created_at": r[13]} for r in rows]
+    return jsonify({"count": len(results), "executions": results})
+
+
+# -- Skill Compiler Upgrade --
+
+_MATURITY_RANK = {"draft": 0, "beta": 1, "stable": 2, "deprecated": -1}
+
+
+@app.route("/skill/<int:skill_id>/record", methods=["POST"])
+def skill_record(skill_id):
+    """Record a skill execution outcome. Body: {outcome, cost?, time_sec?, failure_domain?}"""
+    db = get_db()
+    row = db.execute(
+        "SELECT id, success_count, failure_count, cost_avg, time_avg_sec, failure_domains FROM skills WHERE id = ?",
+        [skill_id]).fetchone()
+    if not row:
+        return jsonify({"error": f"Skill {skill_id} not found"}), 404
+    data = request.json or {}
+    outcome = (data.get("outcome") or "").lower()
+    if outcome not in ("success", "failure"):
+        return jsonify({"error": "outcome must be 'success' or 'failure'"}), 400
+    cost = float(data.get("cost", 0.0) or 0.0)
+    time_sec = float(data.get("time_sec", 0.0) or 0.0)
+    failure_domain = (data.get("failure_domain") or "").strip() if outcome == "failure" else None
+
+    prev_s = row[1] or 0
+    prev_f = row[2] or 0
+    new_s = prev_s + (1 if outcome == "success" else 0)
+    new_f = prev_f + (1 if outcome == "failure" else 0)
+    total = new_s + new_f
+    prev_total = prev_s + prev_f
+    new_cost_avg = ((row[3] or 0.0) * prev_total + cost) / total if total else 0.0
+    new_time_avg = ((row[4] or 0.0) * prev_total + time_sec) / total if total else 0.0
+    domains = _safe_json(row[5], [])
+    if failure_domain:
+        domains = (domains + [failure_domain])[-20:]
+
+    ts = now_iso()
+    db.execute(
+        """UPDATE skills SET success_count = ?, failure_count = ?, cost_avg = ?, time_avg_sec = ?,
+           failure_domains = ?, times_used = times_used + 1, last_used = ? WHERE id = ?""",
+        [new_s, new_f, new_cost_avg, new_time_avg,
+         json.dumps(domains, ensure_ascii=False), ts, skill_id])
+    return jsonify({"status": "recorded", "id": skill_id,
+                    "success_count": new_s, "failure_count": new_f,
+                    "success_rate": (new_s / total) if total else None})
+
+
+@app.route("/skill/<int:skill_id>/promote", methods=["PATCH"])
+def skill_promote(skill_id):
+    """Promote skill maturity. Body: {maturity: 'draft'|'beta'|'stable'|'deprecated'}"""
+    db = get_db()
+    row = db.execute("SELECT id, success_count, failure_count, maturity FROM skills WHERE id = ?", [skill_id]).fetchone()
+    if not row:
+        return jsonify({"error": f"Skill {skill_id} not found"}), 404
+    data = request.json or {}
+    target = (data.get("maturity") or "").lower()
+    if target not in _MATURITY_RANK:
+        return jsonify({"error": f"maturity must be one of {list(_MATURITY_RANK)}"}), 400
+    total = (row[1] or 0) + (row[2] or 0)
+    sr = (row[1] or 0) / total if total else 0.0
+    # Guardrails: need wins before promoting to stable
+    if target == "stable" and (total < 3 or sr < 0.66):
+        return jsonify({"error": f"cannot promote to stable: runs={total}, success_rate={sr:.2f} (need >=3 runs and >=0.66 success)"}), 400
+    if target == "beta" and total < 1:
+        return jsonify({"error": "cannot promote to beta without at least one recorded run"}), 400
+    db.execute("UPDATE skills SET maturity = ? WHERE id = ?", [target, skill_id])
+    return jsonify({"status": "promoted", "id": skill_id, "maturity": target,
+                    "runs": total, "success_rate": sr})
+
+
+# -- Experiment Engine --
+
+@app.route("/experiment", methods=["POST"])
+def experiment_create():
+    """Create an experiment. Body: {hypothesis, context?, metric, min_delta?, min_samples?, variants: [{name, description}]}"""
+    db = get_db()
+    data = request.json or {}
+    hypothesis = (data.get("hypothesis") or "").strip()
+    metric = (data.get("metric") or "").strip()
+    variants = data.get("variants") or []
+    if not hypothesis or not metric:
+        return jsonify({"error": "hypothesis and metric required"}), 400
+    if not isinstance(variants, list) or len(variants) < 2:
+        return jsonify({"error": "at least 2 variants required"}), 400
+    ts = now_iso()
+    exp_id = data.get("experiment_id") or f"e_{uuid.uuid4().hex[:8]}"
+    db["experiments"].insert({
+        "experiment_id": exp_id,
+        "hypothesis": hypothesis,
+        "context": data.get("context", ""),
+        "metric": metric,
+        "min_delta": clamp_float(data.get("min_delta", 0.05), default=0.05, lo=0.0, hi=1.0),
+        "min_samples": safe_int(data.get("min_samples", 10), default=10, min_val=2, max_val=10**6),
+        "variants": json.dumps(variants, ensure_ascii=False),
+        "observations": json.dumps([], ensure_ascii=False),
+        "status": "running",
+        "winner": "",
+        "conclusion": "",
+        "started_at": ts,
+        "concluded_at": "",
+        "created_at": ts,
+        "updated_at": ts,
+    })
+    return jsonify({"status": "created", "experiment_id": exp_id})
+
+
+@app.route("/experiment/list", methods=["GET"])
+def experiment_list():
+    db = get_db()
+    status = request.args.get("status", "")
+    limit = safe_int(request.args.get("limit"), default=50, max_val=500)
+    if status:
+        rows = db.execute(
+            "SELECT id, experiment_id, hypothesis, context, metric, min_delta, min_samples, variants, observations, status, winner, conclusion, started_at, concluded_at FROM experiments WHERE status = ? ORDER BY updated_at DESC LIMIT ?",
+            [status, limit]).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT id, experiment_id, hypothesis, context, metric, min_delta, min_samples, variants, observations, status, winner, conclusion, started_at, concluded_at FROM experiments ORDER BY updated_at DESC LIMIT ?",
+            [limit]).fetchall()
+    results = []
+    for r in rows:
+        obs = _safe_json(r[8], [])
+        variants = _safe_json(r[7], [])
+        per_variant = {}
+        for o in obs:
+            v = o.get("variant")
+            if not v:
+                continue
+            slot = per_variant.setdefault(v, {"n": 0, "sum": 0.0})
+            slot["n"] += 1
+            slot["sum"] += float(o.get("value", 0.0) or 0.0)
+        summary = {v: {"n": d["n"], "mean": (d["sum"] / d["n"]) if d["n"] else None}
+                   for v, d in per_variant.items()}
+        results.append({
+            "id": r[0], "experiment_id": r[1], "hypothesis": r[2], "context": r[3],
+            "metric": r[4], "min_delta": r[5], "min_samples": r[6],
+            "variants": variants, "observations_count": len(obs),
+            "per_variant_summary": summary,
+            "status": r[9], "winner": r[10], "conclusion": r[11],
+            "started_at": r[12], "concluded_at": r[13],
+        })
+    return jsonify({"count": len(results), "experiments": results})
+
+
+@app.route("/experiment/<exp_id>/variant", methods=["POST"])
+def experiment_add_variant(exp_id):
+    db = get_db()
+    row = db.execute("SELECT id, variants FROM experiments WHERE experiment_id = ?", [exp_id]).fetchone()
+    if not row:
+        return jsonify({"error": f"Experiment {exp_id} not found"}), 404
+    data = request.json or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name required"}), 400
+    variants = _safe_json(row[1], [])
+    variants.append({"name": name, "description": data.get("description", "")})
+    db.execute("UPDATE experiments SET variants = ?, updated_at = ? WHERE experiment_id = ?",
+               [json.dumps(variants, ensure_ascii=False), now_iso(), exp_id])
+    return jsonify({"status": "added", "variants": variants})
+
+
+@app.route("/experiment/<exp_id>/observation", methods=["POST"])
+def experiment_add_observation(exp_id):
+    """Record an observation. Body: {variant, value, context?}"""
+    db = get_db()
+    row = db.execute("SELECT id, observations FROM experiments WHERE experiment_id = ?", [exp_id]).fetchone()
+    if not row:
+        return jsonify({"error": f"Experiment {exp_id} not found"}), 404
+    data = request.json or {}
+    variant = (data.get("variant") or "").strip()
+    value = data.get("value")
+    if not variant or value is None:
+        return jsonify({"error": "variant and value required"}), 400
+    obs = _safe_json(row[1], [])
+    obs.append({"variant": variant, "value": float(value),
+                "context": data.get("context", ""), "at": now_iso()})
+    db.execute("UPDATE experiments SET observations = ?, updated_at = ? WHERE experiment_id = ?",
+               [json.dumps(obs, ensure_ascii=False), now_iso(), exp_id])
+    return jsonify({"status": "recorded", "observations": len(obs)})
+
+
+@app.route("/experiment/<exp_id>/conclude", methods=["PATCH"])
+def experiment_conclude(exp_id):
+    """Close experiment. Auto-picks winner if enough samples and delta exceeds threshold,
+    unless body passes {winner, conclusion}."""
+    db = get_db()
+    row = db.execute(
+        "SELECT id, variants, observations, min_delta, min_samples FROM experiments WHERE experiment_id = ?",
+        [exp_id]).fetchone()
+    if not row:
+        return jsonify({"error": f"Experiment {exp_id} not found"}), 404
+    data = request.json or {}
+    observations = _safe_json(row[2], [])
+    min_delta = row[3] or 0.05
+    min_samples = row[4] or 10
+    per_variant = {}
+    for o in observations:
+        v = o.get("variant")
+        if not v:
+            continue
+        slot = per_variant.setdefault(v, {"n": 0, "sum": 0.0})
+        slot["n"] += 1
+        slot["sum"] += float(o.get("value", 0.0) or 0.0)
+    summary = {v: (d["sum"] / d["n"]) if d["n"] else None for v, d in per_variant.items()}
+
+    winner = (data.get("winner") or "").strip()
+    conclusion = data.get("conclusion") or ""
+    if not winner:
+        ranked = sorted(
+            [(v, m) for v, m in summary.items() if m is not None],
+            key=lambda x: x[1], reverse=True,
+        )
+        if len(ranked) >= 2:
+            top_v, top_m = ranked[0]
+            second_m = ranked[1][1]
+            enough_samples = all(per_variant[v]["n"] >= min_samples for v, _ in ranked[:2])
+            if enough_samples and (top_m - second_m) >= min_delta:
+                winner = top_v
+                conclusion = f"auto: {top_v} beat runner-up by {top_m - second_m:.3f} (>= {min_delta})"
+            else:
+                conclusion = conclusion or f"auto: inconclusive (delta={top_m - second_m:.3f}, samples={[per_variant[v]['n'] for v,_ in ranked[:2]]})"
+        else:
+            conclusion = conclusion or "auto: not enough variants with data"
+
+    ts = now_iso()
+    db.execute(
+        "UPDATE experiments SET status = 'concluded', winner = ?, conclusion = ?, concluded_at = ?, updated_at = ? WHERE experiment_id = ?",
+        [winner, conclusion, ts, ts, exp_id])
+    return jsonify({"status": "concluded", "winner": winner or None,
+                    "conclusion": conclusion, "summary": summary})
+
+
+# -- Metrics Framework --
+
+_KNOWN_METRICS = {
+    "tasks_solved_no_correction_pct",
+    "hallucination_rate",
+    "time_to_complete_goal_sec",
+    "skill_reuse_rate",
+    "skill_success_rate",
+    "world_model_precision",
+    "calibration_gap",
+    "actions_reverted_pct",
+    "cost_per_useful_task",
+    "goals_completed_per_week",
+    "approved_improvements_effective_pct",
+}
+
+
+@app.route("/metric", methods=["POST"])
+def metric_record():
+    """Record a metric sample. Body: {name, value, unit?, context?, tags?, timestamp?}"""
+    db = get_db()
+    data = request.json or {}
+    name = (data.get("name") or "").strip()
+    value = data.get("value")
+    if not name or value is None:
+        return jsonify({"error": "name and value required"}), 400
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return jsonify({"error": "value must be numeric"}), 400
+    tags = data.get("tags", [])
+    if not isinstance(tags, str):
+        tags = json.dumps(tags, ensure_ascii=False)
+    db["metrics"].insert({
+        "name": name,
+        "value": value,
+        "unit": data.get("unit", ""),
+        "context": data.get("context", ""),
+        "tags": tags,
+        "timestamp": data.get("timestamp") or now_iso(),
+    })
+    return jsonify({"status": "recorded", "name": name, "value": value,
+                    "known": name in _KNOWN_METRICS})
+
+
+@app.route("/metric/list", methods=["GET"])
+def metric_list():
+    db = get_db()
+    name = request.args.get("name", "")
+    limit = safe_int(request.args.get("limit"), default=100, max_val=2000)
+    if name:
+        rows = db.execute(
+            "SELECT id, name, value, unit, context, tags, timestamp FROM metrics WHERE name = ? ORDER BY timestamp DESC LIMIT ?",
+            [name, limit]).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT id, name, value, unit, context, tags, timestamp FROM metrics ORDER BY timestamp DESC LIMIT ?",
+            [limit]).fetchall()
+    results = [{"id": r[0], "name": r[1], "value": r[2], "unit": r[3],
+                "context": r[4], "tags": _safe_json(r[5], []),
+                "timestamp": r[6]} for r in rows]
+    return jsonify({"count": len(results), "samples": results})
+
+
+@app.route("/metric/summary", methods=["GET"])
+def metric_summary():
+    """Aggregate latest value + 7-day trend per metric name."""
+    db = get_db()
+    names = db.execute("SELECT DISTINCT name FROM metrics").fetchall()
+    now = datetime.datetime.now(datetime.timezone.utc)
+    week_ago = (now - datetime.timedelta(days=7)).isoformat()
+    out = []
+    for (n,) in names:
+        latest = db.execute(
+            "SELECT value, timestamp FROM metrics WHERE name = ? ORDER BY timestamp DESC LIMIT 1",
+            [n]).fetchone()
+        agg = db.execute(
+            "SELECT COUNT(*), AVG(value), MIN(value), MAX(value) FROM metrics WHERE name = ? AND timestamp >= ?",
+            [n, week_ago]).fetchone()
+        out.append({
+            "name": n,
+            "known": n in _KNOWN_METRICS,
+            "latest": {"value": latest[0] if latest else None,
+                       "timestamp": latest[1] if latest else None},
+            "week": {"samples": agg[0], "avg": agg[1], "min": agg[2], "max": agg[3]},
+        })
+    out.sort(key=lambda x: x["name"])
+    return jsonify({"count": len(out), "known_catalog": sorted(_KNOWN_METRICS), "metrics": out})
 
 
 if __name__ == "__main__":
