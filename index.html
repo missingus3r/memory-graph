@@ -137,6 +137,10 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <button class="tab-btn" data-tab="brain">Brain</button>
     <button class="tab-btn" data-tab="goals">Goals</button>
     <button class="tab-btn" data-tab="caps">Caps</button>
+    <button class="tab-btn" data-tab="plans">Plans</button>
+    <button class="tab-btn" data-tab="wm">World</button>
+    <button class="tab-btn" data-tab="exp">Exp</button>
+    <button class="tab-btn" data-tab="metrics">Metrics</button>
   </div>
   <div class="stats">
     <span>Nodos: <b id="nodeCount">0</b></span>
@@ -221,6 +225,39 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     </div>
     <div id="autonomyLevels" style="margin-bottom:20px;padding:14px;border-radius:10px;border:1px solid rgba(52,211,153,0.2);background:rgba(52,211,153,0.03)"></div>
     <div id="capsList" style="display:grid;grid-template-columns:1fr;gap:10px"></div>
+  </div>
+</div>
+<div id="plansPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
+  <div style="max-width:1100px;margin:0 auto">
+    <h2 style="color:#e2e8f0;font-size:18px;font-weight:600;margin:0 0 16px 0">🌲 Hierarchical Plans</h2>
+    <div id="plansList" style="display:grid;gap:12px"></div>
+  </div>
+</div>
+<div id="wmPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
+  <div style="max-width:1100px;margin:0 auto">
+    <h2 style="color:#e2e8f0;font-size:18px;font-weight:600;margin:0 0 16px 0">🌍 World Model</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:20px" id="wmStats"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+      <div><h3 style="color:#60a5fa;font-size:13px;font-weight:700;margin:0 0 8px 0">Entities</h3><div id="wmEntities"></div></div>
+      <div><h3 style="color:#34d399;font-size:13px;font-weight:700;margin:0 0 8px 0">Relations</h3><div id="wmRelations"></div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div><h3 style="color:#f59e0b;font-size:13px;font-weight:700;margin:0 0 8px 0">Events</h3><div id="wmEvents"></div></div>
+      <div><h3 style="color:#c084fc;font-size:13px;font-weight:700;margin:0 0 8px 0">Predictions</h3><div id="wmPredictions"></div></div>
+    </div>
+  </div>
+</div>
+<div id="expPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
+  <div style="max-width:1000px;margin:0 auto">
+    <h2 style="color:#e2e8f0;font-size:18px;font-weight:600;margin:0 0 16px 0">🧪 Experiments</h2>
+    <div id="expList" style="display:grid;gap:12px"></div>
+  </div>
+</div>
+<div id="metricsPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
+  <div style="max-width:1000px;margin:0 auto">
+    <h2 style="color:#e2e8f0;font-size:18px;font-weight:600;margin:0 0 16px 0">📊 Metrics</h2>
+    <div id="metricsCatalog" style="margin-bottom:16px;padding:12px;border-radius:10px;border:1px solid rgba(96,165,250,0.2);background:rgba(96,165,250,0.03)"></div>
+    <div id="metricsList" style="display:grid;gap:8px"></div>
   </div>
 </div>
 <div class="arch-modal-overlay" id="goalOverlay" onclick="closeGoalModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100"></div>
@@ -679,7 +716,11 @@ function switchTab(tab) {
   document.getElementById('brainPanel').style.display = tab === 'brain' ? 'block' : 'none';
   document.getElementById('goalsPanel').style.display = tab === 'goals' ? 'block' : 'none';
   document.getElementById('capsPanel').style.display = tab === 'caps' ? 'block' : 'none';
-  document.body.style.overflow = (tab === 'logs' || tab === 'rag' || tab === 'brain' || tab === 'goals' || tab === 'caps') ? 'auto' : 'hidden';
+  document.getElementById('plansPanel').style.display = tab === 'plans' ? 'block' : 'none';
+  document.getElementById('wmPanel').style.display = tab === 'wm' ? 'block' : 'none';
+  document.getElementById('expPanel').style.display = tab === 'exp' ? 'block' : 'none';
+  document.getElementById('metricsPanel').style.display = tab === 'metrics' ? 'block' : 'none';
+  document.body.style.overflow = (['logs','rag','brain','goals','caps','plans','wm','exp','metrics'].includes(tab)) ? 'auto' : 'hidden';
 
   document.querySelector('.filters').style.display = tab === 'graph' ? 'flex' : 'none';
   document.querySelector('.legend').style.display = tab === 'graph' ? 'flex' : 'none';
@@ -690,6 +731,10 @@ function switchTab(tab) {
   if (tab === 'brain') renderBrain();
   if (tab === 'goals') renderGoals();
   if (tab === 'caps') renderCaps();
+  if (tab === 'plans') renderPlans();
+  if (tab === 'wm') renderWM();
+  if (tab === 'exp') renderExperiments();
+  if (tab === 'metrics') renderMetrics();
 }
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -699,7 +744,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // Restore tab from hash (deferred to ensure all data is defined)
 window.addEventListener('hashchange', () => {
   const h = location.hash.replace('#','');
-  if (['logs','graph','arch','rag','brain','goals','caps'].includes(h)) switchTab(h);
+  if (['logs','graph','arch','rag','brain','goals','caps','plans','wm','exp','metrics'].includes(h)) switchTab(h);
 });
 
 function getCollapsedStates() {
@@ -1602,9 +1647,133 @@ async function renderCaps() {
   }
 }
 
+// === Plans ===
+async function renderPlans() {
+  const el = document.getElementById('plansList');
+  el.innerHTML = '<div style="color:#64748b;font-size:12px">Cargando...</div>';
+  try {
+    const resp = await fetch('/plan/list?limit=50').then(r => r.json());
+    const plans = resp.plans || [];
+    if (!plans.length) { el.innerHTML = '<div style="color:#64748b;padding:20px;text-align:center">No hay plans todavía.</div>'; return; }
+    const details = await Promise.all(plans.map(p => fetch(`/plan/${p.plan_id}`).then(r => r.json())));
+    el.innerHTML = plans.map((p, i) => {
+      const nodes = (details[i].nodes || []);
+      const byParent = {};
+      nodes.forEach(n => { (byParent[n.parent_node||''] ||= []).push(n); });
+      function buildTree(parentId, depth) {
+        const kids = byParent[parentId] || [];
+        return kids.map(n => {
+          const color = n.status === 'completed' ? '#34d399' : n.status === 'in_progress' ? '#60a5fa' : n.status === 'failed' ? '#ef4444' : '#64748b';
+          return `<div style="margin-left:${depth*20}px;padding:6px 10px;border-left:2px solid ${color}22;margin-top:4px">
+            <div style="font-size:12px;color:#e2e8f0"><span style="color:${color};font-weight:700">●</span> ${escapeHtml(n.title)} <span style="color:#64748b;font-size:10px">[${n.node_type}${n.tool?' · '+escapeHtml(n.tool):''}]</span></div>
+            ${n.expected_result?`<div style="font-size:10px;color:#94a3b8;margin-top:2px">→ ${escapeHtml(n.expected_result)}</div>`:''}
+            ${n.rollback?`<div style="font-size:10px;color:#f59e0b;margin-top:2px">↩ rollback: ${escapeHtml(n.rollback)}</div>`:''}
+            ${buildTree(n.node_id, depth+1)}
+          </div>`;
+        }).join('');
+      }
+      return `<div style="padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02)">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <div><div style="font-weight:700;color:#e2e8f0">${escapeHtml(p.title)}</div>
+               <div style="font-family:monospace;font-size:10px;color:#64748b">${p.plan_id} · ${p.nodes} nodos${p.goal_id?' · goal '+p.goal_id:''}</div></div>
+          <span style="font-size:10px;padding:3px 8px;border-radius:6px;background:rgba(100,116,139,0.15);color:#94a3b8">${p.root_status}</span>
+        </div>
+        ${buildTree('', 0)}
+      </div>`;
+    }).join('');
+  } catch (e) { el.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`; }
+}
+
+// === World Model ===
+async function renderWM() {
+  const stats = document.getElementById('wmStats');
+  try {
+    const [ents, rels, evts, preds] = await Promise.all([
+      fetch('/wm/entity/list?limit=50').then(r=>r.json()),
+      fetch('/wm/relation/list?limit=50').then(r=>r.json()),
+      fetch('/wm/event/list?limit=30').then(r=>r.json()),
+      fetch('/wm/prediction/list?limit=30').then(r=>r.json())
+    ]);
+    const card = (label, value, color) => `<div style="padding:14px;border-radius:10px;border:1px solid ${color}33;background:${color}0a;text-align:center"><div style="font-size:24px;font-weight:700;color:${color}">${value}</div><div style="font-size:10px;color:#64748b;text-transform:uppercase;margin-top:4px">${label}</div></div>`;
+    stats.innerHTML = card('Entities', ents.count, '#60a5fa') + card('Relations', rels.count, '#34d399') + card('Events', evts.count, '#f59e0b') + card('Predictions', preds.count, '#c084fc');
+
+    document.getElementById('wmEntities').innerHTML = (ents.entities||[]).map(e => `<div style="padding:8px 10px;border-radius:8px;border:1px solid rgba(96,165,250,0.15);background:rgba(96,165,250,0.03);margin-bottom:4px">
+      <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(e.name)} <span style="font-size:10px;color:#64748b">[${escapeHtml(e.type||'—')}]</span></div>
+      ${e.state?`<div style="font-size:11px;color:#94a3b8">state: ${escapeHtml(e.state)}</div>`:''}
+      <div style="font-size:10px;color:#64748b">conf ${(e.confidence||0).toFixed(2)}</div>
+    </div>`).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
+
+    document.getElementById('wmRelations').innerHTML = (rels.relations||[]).map(r => `<div style="padding:8px 10px;border-radius:8px;border:1px solid rgba(52,211,153,0.15);background:rgba(52,211,153,0.03);margin-bottom:4px">
+      <div style="font-size:12px;color:#e2e8f0"><strong>${escapeHtml(r.subject)}</strong> <span style="color:#34d399">${escapeHtml(r.predicate)}</span> <strong>${escapeHtml(r.object)}</strong></div>
+      <div style="font-size:10px;color:#64748b">conf ${(r.confidence||0).toFixed(2)}</div>
+    </div>`).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
+
+    document.getElementById('wmEvents').innerHTML = (evts.events||[]).map(e => `<div style="padding:8px 10px;border-radius:8px;border:1px solid rgba(245,158,11,0.15);background:rgba(245,158,11,0.03);margin-bottom:4px">
+      <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(e.event_type)}${e.actor?` · ${escapeHtml(e.actor)}→${escapeHtml(e.target||'')}`:''}</div>
+      <div style="font-size:10px;color:#64748b">${(e.occurred_at||'').slice(0,19)}</div>
+    </div>`).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
+
+    document.getElementById('wmPredictions').innerHTML = (preds.predictions||[]).map(p => {
+      const cg = p.calibration;
+      const cgColor = cg===null||cg===undefined?'#64748b':(Math.abs(cg)<0.2?'#34d399':Math.abs(cg)<0.4?'#f59e0b':'#ef4444');
+      return `<div style="padding:8px 10px;border-radius:8px;border:1px solid rgba(192,132,252,0.15);background:rgba(192,132,252,0.03);margin-bottom:4px">
+        <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(p.hypothesis)}</div>
+        <div style="font-size:11px;color:#94a3b8">→ ${escapeHtml(p.predicted_outcome)}</div>
+        <div style="font-size:10px;color:#64748b">conf ${(p.confidence||0).toFixed(2)}${p.resolved?` · resolved (gap ${cg?.toFixed(2)})`:' · pending'}</div>
+      </div>`;
+    }).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
+  } catch (e) { stats.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`; }
+}
+
+// === Experiments ===
+async function renderExperiments() {
+  const el = document.getElementById('expList');
+  el.innerHTML = '<div style="color:#64748b;font-size:12px">Cargando...</div>';
+  try {
+    const resp = await fetch('/experiment/list?limit=50').then(r => r.json());
+    const exps = resp.experiments || [];
+    if (!exps.length) { el.innerHTML = '<div style="color:#64748b;padding:20px;text-align:center">No hay experiments.</div>'; return; }
+    el.innerHTML = exps.map(x => {
+      const sumRows = Object.entries(x.per_variant_summary||{}).map(([v,s])=>`<tr><td style="padding:4px 8px;font-size:11px;color:#e2e8f0">${escapeHtml(v)}</td><td style="padding:4px 8px;font-size:11px;color:#94a3b8">n=${s.n}</td><td style="padding:4px 8px;font-size:11px;color:${v===x.winner?'#34d399':'#94a3b8'};font-weight:${v===x.winner?700:400}">mean ${s.mean!==null?s.mean.toFixed(3):'—'}</td></tr>`).join('');
+      const statusColor = x.status==='concluded'?'#34d399':'#60a5fa';
+      return `<div style="padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02)">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <div style="flex:1"><div style="font-weight:700;color:#e2e8f0;font-size:13px">${escapeHtml(x.hypothesis)}</div>
+               <div style="font-family:monospace;font-size:10px;color:#64748b">${x.experiment_id} · metric: ${escapeHtml(x.metric)} · min δ=${x.min_delta} · min n=${x.min_samples}</div></div>
+          <span style="font-size:10px;padding:3px 8px;border-radius:6px;background:${statusColor}22;color:${statusColor}">${x.status}</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse">${sumRows}</table>
+        ${x.winner?`<div style="margin-top:8px;font-size:11px;color:#34d399">🏆 winner: <strong>${escapeHtml(x.winner)}</strong></div>`:''}
+        ${x.conclusion?`<div style="margin-top:4px;font-size:11px;color:#94a3b8">${escapeHtml(x.conclusion)}</div>`:''}
+      </div>`;
+    }).join('');
+  } catch (e) { el.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`; }
+}
+
+// === Metrics ===
+async function renderMetrics() {
+  const catEl = document.getElementById('metricsCatalog');
+  const el = document.getElementById('metricsList');
+  el.innerHTML = '<div style="color:#64748b;font-size:12px">Cargando...</div>';
+  try {
+    const resp = await fetch('/metric/summary').then(r => r.json());
+    const tracked = new Set((resp.metrics||[]).map(m=>m.name));
+    const catalog = resp.known_catalog || [];
+    catEl.innerHTML = `<div style="font-size:11px;color:#60a5fa;font-weight:700;margin-bottom:6px">KPIs del catálogo (${tracked.size}/${catalog.length} con datos)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${catalog.map(n=>`<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:${tracked.has(n)?'rgba(52,211,153,0.1)':'rgba(100,116,139,0.1)'};color:${tracked.has(n)?'#34d399':'#64748b'};font-family:monospace">${n}</span>`).join('')}</div>`;
+    const metrics = resp.metrics || [];
+    if (!metrics.length) { el.innerHTML = '<div style="color:#64748b;padding:20px;text-align:center">No hay métricas registradas todavía. POST /metric para registrar.</div>'; return; }
+    el.innerHTML = metrics.map(m => `<div style="padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);display:flex;justify-content:space-between;align-items:center">
+      <div><div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(m.name)}${m.known?' <span style="font-size:9px;color:#34d399">✓ KPI</span>':''}</div>
+           <div style="font-size:10px;color:#64748b;margin-top:2px">week: n=${m.week.samples||0} · avg ${m.week.avg!==null?m.week.avg.toFixed(3):'—'} · min ${m.week.min!==null?m.week.min.toFixed(3):'—'} · max ${m.week.max!==null?m.week.max.toFixed(3):'—'}</div></div>
+      <div style="text-align:right"><div style="font-size:18px;font-weight:700;color:#60a5fa">${m.latest.value!==null?m.latest.value.toFixed(3):'—'}</div><div style="font-size:9px;color:#64748b">${(m.latest.timestamp||'').slice(0,16)}</div></div>
+    </div>`).join('');
+  } catch (e) { el.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`; }
+}
+
 // Restore tab from hash (after all data is defined)
 const hashTab = location.hash.replace('#','');
-if (['logs','graph','arch','rag','brain','goals','caps'].includes(hashTab)) switchTab(hashTab);
+if (['logs','graph','arch','rag','brain','goals','caps','plans','wm','exp','metrics'].includes(hashTab)) switchTab(hashTab);
 </script>
 </body>
 </html>
