@@ -74,6 +74,21 @@ Endpoints:
   POST /metric
   GET  /metric/list?name=&limit=
   GET  /metric/summary
+  POST /worldmodel/<id>/promote  (promote soft observation → wm_event/relation/prediction)
+
+Table ownership notes (see split in CLAUDE.md / Self-Improving Harness):
+  - entities        → IDENTITY layer: who/what things ARE (Bruno, gmail,
+                      Claude Opus 4.6). Long-lived. Not state.
+  - wm_entities     → STATE layer: current state of the world
+                      (deploy_status=pending, Bruno_mood=cansado).
+                      Mutable, last_verified matters.
+  - world_model     → SOFT OBSERVATION INBOX: loose patterns before they
+                      earn a structured shape.
+  - wm_events /
+    wm_relations /
+    wm_predictions  → STRUCTURED KNOWLEDGE: graduated from world_model
+                      when an observation becomes testable, causal, or
+                      subject-predicate-object. Use POST /worldmodel/<id>/promote.
 """
 
 import json
@@ -92,7 +107,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -147,6 +162,9 @@ def init_db():
 
     # Three-layer memory migrations (additive on existing tables)
     for mig in [
+        "ALTER TABLE world_model ADD COLUMN promoted_to TEXT DEFAULT ''",
+        "ALTER TABLE world_model ADD COLUMN promoted_at TEXT",
+        "ALTER TABLE world_model ADD COLUMN promoted_ref TEXT",
         "ALTER TABLE memories ADD COLUMN layer TEXT DEFAULT 'semantic'",
         "ALTER TABLE memories ADD COLUMN provenance TEXT DEFAULT '[]'",
         "ALTER TABLE memories ADD COLUMN confidence REAL DEFAULT 0.8",
@@ -947,6 +965,10 @@ def memory_recall():
 
 @app.route("/entity", methods=["POST"])
 def entity_store():
+    """IDENTITY layer — register who/what something IS.
+    Use this for stable facts: Bruno is a person, sam-assistant@agentmail.to is his
+    outbound email, Claude Opus 4.6 is the model. Long-lived, rarely mutates.
+    For the STATE of the world (Bruno_mood, deploy_status), use /wm/entity instead."""
     db = get_db()
     data = request.json or {}
     name = data.get("name", "")
@@ -1563,7 +1585,13 @@ def proposal_reject(proposal_id):
 
 @app.route("/worldmodel", methods=["POST"])
 def worldmodel_create():
-    """Create or update a world model entry. If a matching pattern+category exists, update it."""
+    """SOFT OBSERVATION INBOX — loose pattern that hasn't earned structure yet.
+    Reflection/preference crons dump observations here first. Once a pattern becomes
+    testable (prediction), causal (event with causes/effects), or
+    subject-predicate-object (relation), promote it with POST /worldmodel/<id>/promote.
+
+    If a matching pattern+category already exists, occurrences+confidence are bumped
+    instead of creating a duplicate."""
     db = get_db()
     data = request.json or {}
     ts = now_iso()
@@ -1618,12 +1646,13 @@ def worldmodel_active():
     db = get_db()
     ts = now_iso()
     rows = db.execute(
-        "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at FROM world_model WHERE confidence >= 0.4 AND (expires_at = '' OR expires_at IS NULL OR expires_at > ?) ORDER BY confidence DESC, occurrences DESC",
+        "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at, promoted_to, promoted_ref FROM world_model WHERE confidence >= 0.4 AND (expires_at = '' OR expires_at IS NULL OR expires_at > ?) AND (promoted_to = '' OR promoted_to IS NULL) ORDER BY confidence DESC, occurrences DESC",
         [ts]
     ).fetchall()
     results = [{"id": r[0], "category": r[1], "pattern": r[2], "evidence": r[3],
                 "confidence": r[4], "occurrences": r[5], "first_seen": r[6],
-                "last_seen": r[7], "expires_at": r[8], "created_at": r[9]} for r in rows]
+                "last_seen": r[7], "expires_at": r[8], "created_at": r[9],
+                "promoted_to": r[10] or "", "promoted_ref": r[11] or ""} for r in rows]
     return jsonify({"count": len(results), "results": results})
 
 
@@ -1635,17 +1664,18 @@ def worldmodel_list():
     limit = safe_int(request.args.get("limit", "100"), default=100)
     if category:
         rows = db.execute(
-            "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at FROM world_model WHERE category = ? ORDER BY confidence DESC LIMIT ?",
+            "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at, promoted_to, promoted_ref FROM world_model WHERE category = ? ORDER BY confidence DESC LIMIT ?",
             [category, limit]
         ).fetchall()
     else:
         rows = db.execute(
-            "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at FROM world_model ORDER BY category, confidence DESC LIMIT ?",
+            "SELECT id, category, pattern, evidence, confidence, occurrences, first_seen, last_seen, expires_at, created_at, promoted_to, promoted_ref FROM world_model ORDER BY category, confidence DESC LIMIT ?",
             [limit]
         ).fetchall()
     results = [{"id": r[0], "category": r[1], "pattern": r[2], "evidence": r[3],
                 "confidence": r[4], "occurrences": r[5], "first_seen": r[6],
-                "last_seen": r[7], "expires_at": r[8], "created_at": r[9]} for r in rows]
+                "last_seen": r[7], "expires_at": r[8], "created_at": r[9],
+                "promoted_to": r[10] or "", "promoted_ref": r[11] or ""} for r in rows]
     return jsonify({"count": len(results), "results": results})
 
 
@@ -1657,6 +1687,93 @@ def worldmodel_delete(entry_id):
         return jsonify({"error": f"World model entry {entry_id} not found"}), 404
     db.execute("DELETE FROM world_model WHERE id = ?", [entry_id])
     return jsonify({"status": "deleted", "id": entry_id})
+
+
+@app.route("/worldmodel/<int:entry_id>/promote", methods=["POST"])
+def worldmodel_promote(entry_id):
+    """Graduate a soft observation to structured knowledge.
+    Body: {target: 'event' | 'relation' | 'prediction', ...fields specific to target}
+
+    The source row is kept (its history matters) but marked promoted_to=<target>
+    and promoted_ref=<new id/key> so audits can follow the chain."""
+    db = get_db()
+    row = db.execute(
+        "SELECT id, category, pattern, evidence, confidence, occurrences, promoted_to FROM world_model WHERE id = ?",
+        [entry_id]).fetchone()
+    if not row:
+        return jsonify({"error": f"World model entry {entry_id} not found"}), 404
+    if row[6]:
+        return jsonify({"error": f"Already promoted to {row[6]}"}), 400
+    data = request.json or {}
+    target = (data.get("target") or "").lower().strip()
+    if target not in {"event", "relation", "prediction"}:
+        return jsonify({"error": "target must be 'event' | 'relation' | 'prediction'"}), 400
+
+    ts = now_iso()
+    provenance_entry = f"worldmodel:{entry_id}"
+    promoted_ref = ""
+
+    def _s(v):
+        return v if isinstance(v, str) else json.dumps(v or [], ensure_ascii=False)
+
+    if target == "event":
+        etype = (data.get("event_type") or row[1] or "observed").strip()
+        db["wm_events"].insert({
+            "event_type": etype,
+            "actor": data.get("actor", ""),
+            "target": data.get("target_actor", ""),
+            "payload": _s(data.get("payload", {"pattern": row[2], "evidence": row[3]})),
+            "causes": _s(data.get("causes", [])),
+            "effects": _s(data.get("effects", [])),
+            "occurred_at": data.get("occurred_at", ts),
+            "created_at": ts,
+        })
+        promoted_ref = f"event:{etype}"
+    elif target == "relation":
+        subject = (data.get("subject") or "").strip()
+        predicate = (data.get("predicate") or row[1] or "").strip()
+        obj = (data.get("object") or "").strip()
+        if not (subject and predicate and obj):
+            return jsonify({"error": "relation needs subject, predicate, object"}), 400
+        db["wm_relations"].insert({
+            "subject": subject, "predicate": predicate, "object": obj,
+            "confidence": clamp_float(data.get("confidence", row[4] or 0.6), default=0.6),
+            "evidence": row[3] or "",
+            "provenance": json.dumps([provenance_entry], ensure_ascii=False),
+            "last_verified": ts, "created_at": ts, "updated_at": ts,
+        })
+        promoted_ref = f"{subject}→{predicate}→{obj}"
+    else:  # prediction
+        hypothesis = (data.get("hypothesis") or row[2] or "").strip()
+        outcome = (data.get("predicted_outcome") or "").strip()
+        if not hypothesis or not outcome:
+            return jsonify({"error": "prediction needs hypothesis and predicted_outcome"}), 400
+        db["wm_predictions"].insert({
+            "hypothesis": hypothesis,
+            "condition": data.get("condition", ""),
+            "predicted_outcome": outcome,
+            "counterfactual": data.get("counterfactual", ""),
+            "confidence": clamp_float(data.get("confidence", row[4] or 0.5), default=0.5),
+            "due_at": data.get("due_at", ""),
+            "resolved": 0,
+            "actual_outcome": "",
+            "resolved_at": "",
+            "calibration": None,
+            "created_at": ts,
+            "updated_at": ts,
+        })
+        promoted_ref = f"prediction:{hypothesis[:40]}"
+
+    db.execute(
+        "UPDATE world_model SET promoted_to = ?, promoted_at = ?, promoted_ref = ?, updated_at = ? WHERE id = ?",
+        [target, ts, promoted_ref, ts, entry_id])
+
+    return jsonify({
+        "status": "promoted",
+        "source_id": entry_id,
+        "target": target,
+        "promoted_ref": promoted_ref,
+    })
 
 
 # -- Importance Keywords (dynamic) --
@@ -2527,9 +2644,19 @@ def plan_delete(plan_id):
 
 
 # -- Structured World Model (entities / relations / events / predictions) --
+#
+# Split from /entity by design:
+#   /entity       → IDENTITY (who something IS)
+#   /wm/entity    → STATE (current state of the world, decays)
+# Example: Bruno is stored once in /entity; "Bruno_mood=cansado" lives in /wm/entity
+# and last_verified matters.
 
 @app.route("/wm/entity", methods=["POST"])
 def wm_entity_create():
+    """STATE layer — current state of something in the world.
+    Name is the subject (e.g. 'Bruno_mood', 'deploy_status', 'memory_api_health').
+    The `state` field carries the current value ('cansado', 'pending', 'ok').
+    Repeated POSTs overwrite; last_verified is the freshness clock."""
     db = get_db()
     data = request.json or {}
     name = (data.get("name") or "").strip()
