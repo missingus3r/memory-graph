@@ -24,6 +24,13 @@ Endpoints:
   GET  /worldmodel/active
   GET  /worldmodel/list?category=
   DELETE /worldmodel/<id>
+  POST /goal
+  GET  /goal/<id>
+  GET  /goal/list?status=&limit=
+  PATCH /goal/<id>
+  DELETE /goal/<id>
+  GET  /goal/active
+  GET  /goal/next
 """
 
 import json
@@ -42,7 +49,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -160,6 +167,26 @@ def init_db():
             confidence REAL DEFAULT 0.5, occurrences INTEGER DEFAULT 1,
             first_seen TEXT, last_seen TEXT, expires_at TEXT,
             created_at TEXT, updated_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id TEXT UNIQUE,
+            title TEXT,
+            description TEXT,
+            utility REAL DEFAULT 0.5,
+            deadline TEXT,
+            constraints TEXT,
+            success_criteria TEXT,
+            subgoals TEXT,
+            risk_tier TEXT DEFAULT 'low',
+            status TEXT DEFAULT 'active',
+            cost_estimated TEXT,
+            evidence TEXT,
+            progress REAL DEFAULT 0.0,
+            autonomy_level INTEGER DEFAULT 0,
+            parent_goal TEXT,
+            created_at TEXT,
+            updated_at TEXT
         )"""
     ]:
         try:
@@ -1452,6 +1479,197 @@ def keywords_delete(kw_id):
         global _keywords_cache_ts
         _keywords_cache_ts = 0
     return jsonify({"status": "deleted", "id": kw_id})
+
+
+# -- Goal Engine --
+import uuid
+
+
+def _goal_row_to_dict(r):
+    def _jload(s, default):
+        if not s:
+            return default
+        try:
+            return json.loads(s)
+        except Exception:
+            return default
+    return {
+        "id": r[0], "goal_id": r[1], "title": r[2], "description": r[3],
+        "utility": r[4], "deadline": r[5],
+        "constraints": _jload(r[6], []),
+        "success_criteria": _jload(r[7], []),
+        "subgoals": _jload(r[8], []),
+        "risk_tier": r[9], "status": r[10], "cost_estimated": r[11],
+        "evidence": _jload(r[12], []),
+        "progress": r[13], "autonomy_level": r[14], "parent_goal": r[15],
+        "created_at": r[16], "updated_at": r[17],
+    }
+
+
+_GOAL_COLUMNS = "id, goal_id, title, description, utility, deadline, constraints, success_criteria, subgoals, risk_tier, status, cost_estimated, evidence, progress, autonomy_level, parent_goal, created_at, updated_at"
+
+
+@app.route("/goal", methods=["POST"])
+def goal_create():
+    """Create a new goal. Body: {title, description?, utility?, deadline?, constraints?, success_criteria?, subgoals?, risk_tier?, cost_estimated?, autonomy_level?, parent_goal?}"""
+    db = get_db()
+    data = request.json or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+
+    def _jdump(v):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return v
+        return json.dumps(v, ensure_ascii=False)
+
+    ts = now_iso()
+    goal_id = data.get("goal_id") or f"g_{uuid.uuid4().hex[:8]}"
+    row = {
+        "goal_id": goal_id,
+        "title": title,
+        "description": data.get("description", ""),
+        "utility": clamp_float(data.get("utility", 0.5), default=0.5),
+        "deadline": data.get("deadline", ""),
+        "constraints": _jdump(data.get("constraints", [])),
+        "success_criteria": _jdump(data.get("success_criteria", [])),
+        "subgoals": _jdump(data.get("subgoals", [])),
+        "risk_tier": data.get("risk_tier", "low"),
+        "status": data.get("status", "active"),
+        "cost_estimated": data.get("cost_estimated", ""),
+        "evidence": _jdump(data.get("evidence", [])),
+        "progress": clamp_float(data.get("progress", 0.0), default=0.0),
+        "autonomy_level": safe_int(data.get("autonomy_level", 0), default=0, min_val=0, max_val=5),
+        "parent_goal": data.get("parent_goal", ""),
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    try:
+        db["goals"].insert(row)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    created = db.execute(f"SELECT {_GOAL_COLUMNS} FROM goals WHERE goal_id = ?", [goal_id]).fetchone()
+    return jsonify({"status": "created", "goal": _goal_row_to_dict(created)})
+
+
+@app.route("/goal/<goal_id>", methods=["GET"])
+def goal_get(goal_id):
+    db = get_db()
+    row = db.execute(f"SELECT {_GOAL_COLUMNS} FROM goals WHERE goal_id = ?", [goal_id]).fetchone()
+    if not row:
+        return jsonify({"error": f"Goal {goal_id} not found"}), 404
+    return jsonify({"goal": _goal_row_to_dict(row)})
+
+
+@app.route("/goal/list", methods=["GET"])
+def goal_list():
+    db = get_db()
+    status = request.args.get("status", "")
+    limit = safe_int(request.args.get("limit"), default=50, max_val=500)
+    if status:
+        rows = db.execute(
+            f"SELECT {_GOAL_COLUMNS} FROM goals WHERE status = ? ORDER BY utility DESC, deadline ASC LIMIT ?",
+            [status, limit]).fetchall()
+    else:
+        rows = db.execute(
+            f"SELECT {_GOAL_COLUMNS} FROM goals ORDER BY status, utility DESC LIMIT ?",
+            [limit]).fetchall()
+    results = [_goal_row_to_dict(r) for r in rows]
+    return jsonify({"count": len(results), "goals": results})
+
+
+@app.route("/goal/active", methods=["GET"])
+def goal_active():
+    db = get_db()
+    rows = db.execute(
+        f"SELECT {_GOAL_COLUMNS} FROM goals WHERE status = 'active' ORDER BY utility DESC, deadline ASC"
+    ).fetchall()
+    results = [_goal_row_to_dict(r) for r in rows]
+    return jsonify({"count": len(results), "goals": results})
+
+
+@app.route("/goal/next", methods=["GET"])
+def goal_next():
+    """Return the next recommended goal by priority = utility * urgency.
+    Urgency = 1.0 if no deadline, else clamp(1 / days_remaining, 0, 3)."""
+    db = get_db()
+    rows = db.execute(
+        f"SELECT {_GOAL_COLUMNS} FROM goals WHERE status = 'active'"
+    ).fetchall()
+    if not rows:
+        return jsonify({"goal": None, "reason": "no active goals"})
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    scored = []
+    for r in rows:
+        g_dict = _goal_row_to_dict(r)
+        deadline = g_dict.get("deadline") or ""
+        urgency = 1.0
+        if deadline:
+            try:
+                dl = datetime.datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+                if dl.tzinfo is None:
+                    dl = dl.replace(tzinfo=datetime.timezone.utc)
+                days = max((dl - now).total_seconds() / 86400.0, 0.01)
+                urgency = max(0.1, min(3.0, 7.0 / days))
+            except Exception:
+                urgency = 1.0
+        priority = g_dict["utility"] * urgency * (1.0 - g_dict.get("progress", 0.0))
+        scored.append((priority, g_dict, urgency))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    best = scored[0]
+    return jsonify({"goal": best[1], "priority": round(best[0], 4), "urgency": round(best[2], 4)})
+
+
+@app.route("/goal/<goal_id>", methods=["PATCH"])
+def goal_update(goal_id):
+    db = get_db()
+    existing = db.execute("SELECT id FROM goals WHERE goal_id = ?", [goal_id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Goal {goal_id} not found"}), 404
+    data = request.json or {}
+    updatable = {
+        "title", "description", "utility", "deadline", "constraints",
+        "success_criteria", "subgoals", "risk_tier", "status",
+        "cost_estimated", "evidence", "progress", "autonomy_level", "parent_goal",
+    }
+    json_fields = {"constraints", "success_criteria", "subgoals", "evidence"}
+    sets = []
+    vals = []
+    for k, v in data.items():
+        if k not in updatable:
+            continue
+        if k in json_fields and not isinstance(v, str):
+            v = json.dumps(v, ensure_ascii=False)
+        if k == "utility":
+            v = clamp_float(v, default=0.5)
+        if k == "progress":
+            v = clamp_float(v, default=0.0)
+        if k == "autonomy_level":
+            v = safe_int(v, default=0, min_val=0, max_val=5)
+        sets.append(f"{k} = ?")
+        vals.append(v)
+    if not sets:
+        return jsonify({"error": "no updatable fields provided"}), 400
+    sets.append("updated_at = ?")
+    vals.append(now_iso())
+    vals.append(goal_id)
+    db.execute(f"UPDATE goals SET {', '.join(sets)} WHERE goal_id = ?", vals)
+    row = db.execute(f"SELECT {_GOAL_COLUMNS} FROM goals WHERE goal_id = ?", [goal_id]).fetchone()
+    return jsonify({"status": "updated", "goal": _goal_row_to_dict(row)})
+
+
+@app.route("/goal/<goal_id>", methods=["DELETE"])
+def goal_delete(goal_id):
+    db = get_db()
+    existing = db.execute("SELECT id FROM goals WHERE goal_id = ?", [goal_id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Goal {goal_id} not found"}), 404
+    db.execute("DELETE FROM goals WHERE goal_id = ?", [goal_id])
+    return jsonify({"status": "deleted", "goal_id": goal_id})
 
 
 if __name__ == "__main__":
