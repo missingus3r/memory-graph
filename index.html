@@ -135,12 +135,6 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <button class="tab-btn" data-tab="arch">Arch</button>
     <button class="tab-btn" data-tab="rag">RAG</button>
     <button class="tab-btn" data-tab="brain">Brain</button>
-    <button class="tab-btn" data-tab="goals">Goals</button>
-    <button class="tab-btn" data-tab="caps">Caps</button>
-    <button class="tab-btn" data-tab="plans">Plans</button>
-    <button class="tab-btn" data-tab="wm">World</button>
-    <button class="tab-btn" data-tab="exp">Exp</button>
-    <button class="tab-btn" data-tab="metrics">Metrics</button>
   </div>
   <div class="stats">
     <span>Nodos: <b id="nodeCount">0</b></span>
@@ -206,58 +200,104 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <div id="ragResults"></div>
   </div>
 </div>
-<div id="brainPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px"></div>
-<div id="goalsPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
-  <div style="max-width:1000px;margin:0 auto">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
-      <h2 style="color:#e2e8f0;font-size:18px;font-weight:600;margin:0">🎯 Goal Engine</h2>
-      <button onclick="openNewGoal()" style="padding:8px 16px;border-radius:8px;border:1px solid rgba(192,132,252,0.3);background:rgba(192,132,252,0.08);color:#c084fc;font-size:12px;font-weight:600;cursor:pointer">+ Nueva meta</button>
-    </div>
-    <div id="goalsNext" style="padding:12px 16px;border-radius:10px;border:1px solid rgba(192,132,252,0.25);background:rgba(192,132,252,0.05);margin-bottom:16px;font-size:13px;color:#c084fc"></div>
-    <div id="goalsList" style="display:grid;grid-template-columns:1fr;gap:12px"></div>
+<div id="brainPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f">
+  <div style="position:sticky;top:0;z-index:5;background:rgba(10,10,15,0.95);backdrop-filter:blur(10px);border-bottom:1px solid rgba(255,255,255,0.06);padding:12px 20px">
+    <div style="max-width:1200px;margin:0 auto;display:flex;gap:6px;flex-wrap:wrap" id="brainSubNav"></div>
   </div>
-</div>
-<div id="capsPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
-  <div style="max-width:1000px;margin:0 auto">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
-      <h2 style="color:#e2e8f0;font-size:18px;font-weight:600;margin:0">🧬 Capabilities & Autonomy</h2>
-      <span id="capsCount" style="font-size:11px;color:#64748b"></span>
-    </div>
-    <div id="autonomyLevels" style="margin-bottom:20px;padding:14px;border-radius:10px;border:1px solid rgba(52,211,153,0.2);background:rgba(52,211,153,0.03)"></div>
-    <div id="capsList" style="display:grid;grid-template-columns:1fr;gap:10px"></div>
-  </div>
-</div>
-<div id="plansPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
-  <div style="max-width:1100px;margin:0 auto">
-    <h2 style="color:#e2e8f0;font-size:18px;font-weight:600;margin:0 0 16px 0">🌲 Hierarchical Plans</h2>
-    <div id="plansList" style="display:grid;gap:12px"></div>
-  </div>
-</div>
-<div id="wmPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
-  <div style="max-width:1100px;margin:0 auto">
-    <h2 style="color:#e2e8f0;font-size:18px;font-weight:600;margin:0 0 16px 0">🌍 World Model</h2>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:20px" id="wmStats"></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
-      <div><h3 style="color:#60a5fa;font-size:13px;font-weight:700;margin:0 0 8px 0">Entities</h3><div id="wmEntities"></div></div>
-      <div><h3 style="color:#34d399;font-size:13px;font-weight:700;margin:0 0 8px 0">Relations</h3><div id="wmRelations"></div></div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-      <div><h3 style="color:#f59e0b;font-size:13px;font-weight:700;margin:0 0 8px 0">Events</h3><div id="wmEvents"></div></div>
-      <div><h3 style="color:#c084fc;font-size:13px;font-weight:700;margin:0 0 8px 0">Predictions</h3><div id="wmPredictions"></div></div>
-    </div>
-  </div>
-</div>
-<div id="expPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
-  <div style="max-width:1000px;margin:0 auto">
-    <h2 style="color:#e2e8f0;font-size:18px;font-weight:600;margin:0 0 16px 0">🧪 Experiments</h2>
-    <div id="expList" style="display:grid;gap:12px"></div>
-  </div>
-</div>
-<div id="metricsPanel" style="display:none;position:fixed;top:50px;left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
-  <div style="max-width:1000px;margin:0 auto">
-    <h2 style="color:#e2e8f0;font-size:18px;font-weight:600;margin:0 0 16px 0">📊 Metrics</h2>
-    <div id="metricsCatalog" style="margin-bottom:16px;padding:12px;border-radius:10px;border:1px solid rgba(96,165,250,0.2);background:rgba(96,165,250,0.03)"></div>
-    <div id="metricsList" style="display:grid;gap:8px"></div>
+  <div style="max-width:1200px;margin:0 auto;padding:20px">
+
+    <!-- 1. OVERVIEW -->
+    <section class="brain-section" id="brain-overview" style="margin-bottom:40px">
+      <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0 0 6px 0">🧠 Overview</h2>
+      <p style="color:#64748b;font-size:12px;margin:0 0 16px 0">Pulso actual del sistema — un vistazo rápido antes de bajar a cada subsistema.</p>
+      <div id="brainOverview" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:16px"></div>
+      <div id="brainKpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px"></div>
+    </section>
+
+    <!-- 2. GOALS & PLANS -->
+    <section class="brain-section" id="brain-goals" style="margin-bottom:40px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:6px">
+        <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0">🎯 Goals & Plans</h2>
+        <button onclick="openNewGoal()" style="padding:7px 14px;border-radius:8px;border:1px solid rgba(192,132,252,0.3);background:rgba(192,132,252,0.08);color:#c084fc;font-size:12px;font-weight:600;cursor:pointer">+ Nueva meta</button>
+      </div>
+      <p style="color:#64748b;font-size:12px;margin:0 0 14px 0">Qué está persiguiendo el sistema y cómo lo está descomponiendo.</p>
+      <div id="goalsNext" style="padding:12px 16px;border-radius:10px;border:1px solid rgba(192,132,252,0.25);background:rgba(192,132,252,0.05);margin-bottom:14px;font-size:13px;color:#c084fc"></div>
+      <div id="goalsList" style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:20px"></div>
+      <h3 style="color:#94a3b8;font-size:13px;font-weight:700;margin:16px 0 10px 0">🌲 Planes jerárquicos</h3>
+      <div id="plansList" style="display:grid;gap:12px"></div>
+    </section>
+
+    <!-- 3. MEMORY -->
+    <section class="brain-section" id="brain-memory" style="margin-bottom:40px">
+      <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0 0 6px 0">🧠 Memoria</h2>
+      <p style="color:#64748b;font-size:12px;margin:0 0 14px 0">Tres capas: episódica (qué pasó), semántica (qué es verdad estable), procedimental (cómo hacer).</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+        <div>
+          <h3 style="color:#60a5fa;font-size:13px;font-weight:700;margin:0 0 8px 0">📜 Episódica (últimas 48h)</h3>
+          <div id="memEpisodic" style="display:grid;gap:6px"></div>
+        </div>
+        <div>
+          <h3 style="color:#34d399;font-size:13px;font-weight:700;margin:0 0 8px 0">💎 Semántica — Memorias</h3>
+          <div id="memSemanticMemories" style="display:grid;gap:6px"></div>
+          <h3 style="color:#f472b6;font-size:13px;font-weight:700;margin:14px 0 8px 0">👤 Semántica — Entidades (identidad)</h3>
+          <div id="memEntities" style="display:grid;gap:6px"></div>
+        </div>
+        <div>
+          <h3 style="color:#22c55e;font-size:13px;font-weight:700;margin:0 0 8px 0">⚙️ Procedimental — Skills</h3>
+          <div id="memProcedural" style="display:grid;gap:6px"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. WORLD MODEL -->
+    <section class="brain-section" id="brain-world" style="margin-bottom:40px">
+      <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0 0 6px 0">🌍 World Model (causal)</h2>
+      <p style="color:#64748b;font-size:12px;margin:0 0 14px 0">Entidades-estado, relaciones S-P-O, eventos con causas/efectos, predicciones y calibración.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:16px" id="wmStats"></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+        <div><h3 style="color:#60a5fa;font-size:13px;font-weight:700;margin:0 0 8px 0">Entities (estado)</h3><div id="wmEntities"></div></div>
+        <div><h3 style="color:#34d399;font-size:13px;font-weight:700;margin:0 0 8px 0">Relations</h3><div id="wmRelations"></div></div>
+        <div><h3 style="color:#f59e0b;font-size:13px;font-weight:700;margin:0 0 8px 0">Events</h3><div id="wmEvents"></div></div>
+        <div><h3 style="color:#c084fc;font-size:13px;font-weight:700;margin:0 0 8px 0">Predictions + calibration</h3><div id="wmPredictions"></div></div>
+      </div>
+    </section>
+
+    <!-- 5. SELF-KNOWLEDGE -->
+    <section class="brain-section" id="brain-self" style="margin-bottom:40px">
+      <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0 0 6px 0">🧬 Self-knowledge</h2>
+      <p style="color:#64748b;font-size:12px;margin:0 0 14px 0">Qué sé hacer, con cuánta confianza, con qué supervisión y hasta qué nivel de autonomía.</p>
+      <div id="autonomyLevels" style="margin-bottom:16px;padding:12px 14px;border-radius:10px;border:1px solid rgba(52,211,153,0.2);background:rgba(52,211,153,0.03)"></div>
+      <div id="capsList" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:10px"></div>
+      <span id="capsCount" style="display:block;text-align:right;font-size:10px;color:#64748b;margin-top:8px"></span>
+    </section>
+
+    <!-- 6. SAFETY -->
+    <section class="brain-section" id="brain-safety" style="margin-bottom:40px">
+      <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0 0 6px 0">🔍 Verificación & Sandbox</h2>
+      <p style="color:#64748b;font-size:12px;margin:0 0 14px 0">Chequeos de veracidad y ejecuciones simuladas antes de tocar el mundo real.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+        <div><h3 style="color:#ef4444;font-size:13px;font-weight:700;margin:0 0 8px 0">Verifications</h3><div id="brainVerifications" style="display:grid;gap:6px"></div></div>
+        <div><h3 style="color:#f59e0b;font-size:13px;font-weight:700;margin:0 0 8px 0">Sandbox executions</h3><div id="brainSandbox" style="display:grid;gap:6px"></div></div>
+      </div>
+    </section>
+
+    <!-- 7. LEARNING -->
+    <section class="brain-section" id="brain-learning" style="margin-bottom:40px">
+      <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0 0 6px 0">🧪 Aprendizaje</h2>
+      <p style="color:#64748b;font-size:12px;margin:0 0 14px 0">Experimentos A/B, reflexiones diarias, preferencias inferidas, insights, propuestas, keywords.</p>
+      <h3 style="color:#c084fc;font-size:13px;font-weight:700;margin:0 0 8px 0">🧪 Experimentos</h3>
+      <div id="expList" style="display:grid;gap:12px;margin-bottom:20px"></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px" id="brainLearnGrid"></div>
+    </section>
+
+    <!-- 8. METRICS -->
+    <section class="brain-section" id="brain-metrics" style="margin-bottom:40px">
+      <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0 0 6px 0">📊 Métricas</h2>
+      <p style="color:#64748b;font-size:12px;margin:0 0 14px 0">Los KPIs que prueban si el sistema realmente mejora.</p>
+      <div id="metricsCatalog" style="margin-bottom:14px;padding:12px;border-radius:10px;border:1px solid rgba(96,165,250,0.2);background:rgba(96,165,250,0.03)"></div>
+      <div id="metricsList" style="display:grid;gap:8px"></div>
+    </section>
+
   </div>
 </div>
 <div class="arch-modal-overlay" id="goalOverlay" onclick="closeGoalModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100"></div>
@@ -714,13 +754,7 @@ function switchTab(tab) {
   document.getElementById('archPanel').style.display = tab === 'arch' ? 'block' : 'none';
   document.getElementById('ragPanel').style.display = tab === 'rag' ? 'block' : 'none';
   document.getElementById('brainPanel').style.display = tab === 'brain' ? 'block' : 'none';
-  document.getElementById('goalsPanel').style.display = tab === 'goals' ? 'block' : 'none';
-  document.getElementById('capsPanel').style.display = tab === 'caps' ? 'block' : 'none';
-  document.getElementById('plansPanel').style.display = tab === 'plans' ? 'block' : 'none';
-  document.getElementById('wmPanel').style.display = tab === 'wm' ? 'block' : 'none';
-  document.getElementById('expPanel').style.display = tab === 'exp' ? 'block' : 'none';
-  document.getElementById('metricsPanel').style.display = tab === 'metrics' ? 'block' : 'none';
-  document.body.style.overflow = (['logs','rag','brain','goals','caps','plans','wm','exp','metrics'].includes(tab)) ? 'auto' : 'hidden';
+  document.body.style.overflow = (['logs','rag','brain'].includes(tab)) ? 'auto' : 'hidden';
 
   document.querySelector('.filters').style.display = tab === 'graph' ? 'flex' : 'none';
   document.querySelector('.legend').style.display = tab === 'graph' ? 'flex' : 'none';
@@ -729,12 +763,6 @@ function switchTab(tab) {
   if (tab === 'arch') renderArch();
   if (tab === 'rag') loadRagDashboard();
   if (tab === 'brain') renderBrain();
-  if (tab === 'goals') renderGoals();
-  if (tab === 'caps') renderCaps();
-  if (tab === 'plans') renderPlans();
-  if (tab === 'wm') renderWM();
-  if (tab === 'exp') renderExperiments();
-  if (tab === 'metrics') renderMetrics();
 }
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -744,7 +772,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // Restore tab from hash (deferred to ensure all data is defined)
 window.addEventListener('hashchange', () => {
   const h = location.hash.replace('#','');
-  if (['logs','graph','arch','rag','brain','goals','caps','plans','wm','exp','metrics'].includes(h)) switchTab(h);
+  if (['logs','graph','arch','rag','brain'].includes(h)) switchTab(h);
 });
 
 function getCollapsedStates() {
@@ -1223,258 +1251,261 @@ function doReindex() {
   });
 }
 
-// === Brain Dashboard ===
+
+// === Brain Dashboard (consolidated v2.1.0) ===
 async function renderBrain() {
-  const panel = document.getElementById('brainPanel');
-  panel.innerHTML = '<div style="max-width:1000px;margin:0 auto;padding:20px;color:#64748b;font-size:13px">Loading brain data...</div>';
-
-  const [skills, preferences, reflections, worldmodel, insights, proposals, keywords, entities] = await Promise.all([
-    fetch(API+'/skill/list').then(r=>r.json()).catch(()=>({results:[]})),
-    fetch(API+'/preference/list').then(r=>r.json()).catch(()=>({results:[]})),
-    fetch(API+'/reflection/list').then(r=>r.json()).catch(()=>({results:[]})),
-    fetch(API+'/worldmodel/active').then(r=>r.json()).catch(()=>({results:[]})),
-    fetch(API+'/insight/active').then(r=>r.json()).catch(()=>({results:[]})),
-    fetch(API+'/proposal/pending').then(r=>r.json()).catch(()=>({results:[]})),
-    fetch(API+'/keywords').then(r=>r.json()).catch(()=>({results:[]})),
-    fetch(API+'/entity/search?q=&limit=50').then(r=>r.json()).catch(()=>({results:[]}))
-  ]);
-
-  const sk = skills.results || skills || [];
-  const pr = preferences.results || preferences || [];
-  const rf = reflections.results || reflections || [];
-  const wm = worldmodel.results || worldmodel || [];
-  const ins = insights.results || insights || [];
-  const prop = proposals.results || proposals || [];
-  const kws = keywords.results || keywords || [];
-  const ents = entities.results || entities || [];
-
-  const cardStyle = (color) => `background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-left:3px solid ${color};border-radius:12px;padding:16px 20px;margin-bottom:12px`;
-  const sectionStyle = 'margin-bottom:32px';
-  const titleStyle = (color) => `font-size:16px;font-weight:700;color:${color};margin-bottom:14px;display:flex;align-items:center;gap:8px`;
-  const countBadge = (n, color) => `<span style="font-size:11px;font-weight:600;background:${color}22;color:${color};padding:2px 8px;border-radius:8px">${n}</span>`;
-  const emptyMsg = (msg) => `<div style="color:#475569;font-size:13px;padding:12px 0;font-style:italic">${msg}</div>`;
-
-  let html = '<div style="max-width:1000px;margin:0 auto;padding:20px">';
-
-  // Section 1: Skills
-  html += `<div style="${sectionStyle}">`;
-  html += `<div style="${titleStyle('#22c55e')}">Learned Skills ${countBadge(sk.length, '#22c55e')}</div>`;
-  if (sk.length === 0) {
-    html += emptyMsg('No skills learned yet');
-  } else {
-    sk.forEach(s => {
-      const used = s.times_used || 0;
-      html += `<div style="${cardStyle('#22c55e')}">
-        <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px">${(s.name||'Unnamed skill').replace(/</g,'&lt;')}</div>
-        ${s.trigger_pattern ? '<div style="font-family:monospace;font-size:11px;color:#64748b;margin-bottom:4px">' + s.trigger_pattern.replace(/</g,'&lt;') + '</div>' : ''}
-        ${s.description ? '<div style="color:#94a3b8;font-size:13px;margin-bottom:6px">' + s.description.replace(/</g,'&lt;') + '</div>' : ''}
-        <span style="font-size:10px;font-weight:600;background:rgba(34,197,94,0.1);color:#22c55e;padding:2px 8px;border-radius:6px">Used ${used}x</span>
-      </div>`;
-    });
-  }
-  html += '</div>';
-
-  // Section 1b: Entities
-  html += `<div style="${sectionStyle}">`;
-  html += `<div style="${titleStyle('#f472b6')}">Entities ${countBadge(ents.length, '#f472b6')}</div>`;
-  if (ents.length === 0) {
-    html += emptyMsg('No entities tracked yet');
-  } else {
-    const byType = {};
-    ents.forEach(e => { const t = e.type || 'other'; if (!byType[t]) byType[t] = []; byType[t].push(e); });
-    const typeColors = {person:'#f472b6', company:'#60a5fa', tool:'#34d399', concept:'#c084fc', other:'#94a3b8'};
-    Object.entries(byType).forEach(([type, items]) => {
-      html += `<div style="font-size:11px;font-weight:700;color:${typeColors[type]||'#94a3b8'};text-transform:uppercase;letter-spacing:1px;margin:10px 0 6px">${type} (${items.length})</div>`;
-      html += `<div style="display:flex;flex-wrap:wrap;gap:6px">`;
-      items.forEach(e => {
-        let detail = '';
-        try { const d = JSON.parse(e.details || '{}'); detail = Object.values(d).filter(v=>typeof v==='string').slice(0,2).join(', '); } catch(_){}
-        html += `<span title="${detail.replace(/"/g,'&quot;')}" style="display:inline-flex;align-items:center;gap:4px;background:${(typeColors[type]||'#94a3b8')}15;border:1px solid ${(typeColors[type]||'#94a3b8')}30;color:#e2e8f0;padding:4px 10px;border-radius:6px;font-size:12px;cursor:default">`;
-        html += `${(e.name||'Unknown').replace(/</g,'&lt;')}`;
-        html += `</span>`;
-      });
-      html += `</div>`;
-    });
-  }
-  html += '</div>';
-
-  // Section 2: Preferences
-  html += `<div style="${sectionStyle}">`;
-  html += `<div style="${titleStyle('#22d3ee')}">Active Preferences ${countBadge(pr.length, '#22d3ee')}</div>`;
-  if (pr.length === 0) {
-    html += emptyMsg('No preferences inferred yet');
-  } else {
-    pr.forEach(p => {
-      const conf = p.confidence || 0;
-      const pct = Math.round(conf * 100);
-      const barColor = conf > 0.7 ? '#22d3ee' : conf > 0.4 ? '#fbbf24' : '#64748b';
-      html += `<div style="${cardStyle('#22d3ee')}">
-        <div style="color:#e2e8f0;font-size:13px;margin-bottom:8px">${(p.rule || p.key || p.value || 'Unknown').replace(/</g,'&lt;')}</div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <div style="flex:1;height:6px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden">
-            <div style="width:${pct}%;height:100%;background:${barColor};border-radius:3px"></div>
-          </div>
-          <span style="font-size:11px;color:${barColor};font-weight:600">${pct}%</span>
-        </div>
-      </div>`;
-    });
-  }
-  html += '</div>';
-
-  // Section 3: Reflections
-  html += `<div style="${sectionStyle}">`;
-  html += `<div style="${titleStyle('#eab308')}">Daily Reflections ${countBadge(rf.length, '#eab308')}</div>`;
-  if (rf.length === 0) {
-    html += emptyMsg('No reflections yet');
-  } else {
-    const showAll = rf.length <= 5;
-    const visible = showAll ? rf : rf.slice(0, 5);
-    visible.forEach((r, i) => {
-      const date = r.created_at ? new Date(r.created_at).toLocaleDateString('es-UY', {weekday:'short', year:'numeric', month:'short', day:'numeric'}) : 'Unknown date';
-      const rid = 'refl_toggle_' + i;
-      html += `<div style="${cardStyle('#eab308')}">
-        <div onclick="(function(){var b=document.getElementById('${rid}');b.style.display=b.style.display==='none'?'block':'none'})()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">
-          <span style="font-weight:600;color:#eab308;font-size:13px">${date}</span>
-          <span style="color:#64748b;font-size:10px">click to expand</span>
-        </div>
-        <div id="${rid}" style="display:none;margin-top:10px;color:#94a3b8;font-size:13px;line-height:1.7">
-          ${r.summary ? '<div style="margin-bottom:6px"><b style="color:#e2e8f0">Analysis:</b> ' + (r.summary||'').replace(/</g,'&lt;') + '</div>' : ''}
-          ${r.content ? '<div style="margin-bottom:6px">' + (r.content||'').replace(/</g,'&lt;').replace(/\n/g,'<br>') + '</div>' : ''}
-          ${r.insights ? '<div style="margin-bottom:6px"><b style="color:#e2e8f0">Insights:</b> ' + (typeof r.insights === 'string' ? r.insights.replace(/</g,'&lt;') : JSON.stringify(r.insights)) + '</div>' : ''}
-          ${r.actions ? '<div><b style="color:#e2e8f0">Actions:</b> ' + (typeof r.actions === 'string' ? r.actions.replace(/</g,'&lt;') : JSON.stringify(r.actions)) + '</div>' : ''}
-        </div>
-      </div>`;
-    });
-    if (!showAll) {
-      html += `<div id="refl_show_all" style="text-align:center;padding:8px">
-        <button onclick="(function(){document.getElementById('refl_hidden').style.display='block';document.getElementById('refl_show_all').style.display='none'})()" style="background:rgba(234,179,8,0.1);border:1px solid rgba(234,179,8,0.3);color:#eab308;padding:6px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Show all ${rf.length} reflections</button>
-      </div>`;
-      html += `<div id="refl_hidden" style="display:none">`;
-      rf.slice(5).forEach((r, i) => {
-        const date = r.created_at ? new Date(r.created_at).toLocaleDateString('es-UY', {weekday:'short', year:'numeric', month:'short', day:'numeric'}) : 'Unknown date';
-        const rid = 'refl_toggle_h' + i;
-        html += `<div style="${cardStyle('#eab308')}">
-          <div onclick="(function(){var b=document.getElementById('${rid}');b.style.display=b.style.display==='none'?'block':'none'})()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">
-            <span style="font-weight:600;color:#eab308;font-size:13px">${date}</span>
-            <span style="color:#64748b;font-size:10px">click to expand</span>
-          </div>
-          <div id="${rid}" style="display:none;margin-top:10px;color:#94a3b8;font-size:13px;line-height:1.7">
-            ${r.summary ? '<div style="margin-bottom:6px"><b style="color:#e2e8f0">Analysis:</b> ' + (r.summary||'').replace(/</g,'&lt;') + '</div>' : ''}
-            ${r.content ? '<div style="margin-bottom:6px">' + (r.content||'').replace(/</g,'&lt;').replace(/\n/g,'<br>') + '</div>' : ''}
-            ${r.insights ? '<div style="margin-bottom:6px"><b style="color:#e2e8f0">Insights:</b> ' + (typeof r.insights === 'string' ? r.insights.replace(/</g,'&lt;') : JSON.stringify(r.insights)) + '</div>' : ''}
-            ${r.actions ? '<div><b style="color:#e2e8f0">Actions:</b> ' + (typeof r.actions === 'string' ? r.actions.replace(/</g,'&lt;') : JSON.stringify(r.actions)) + '</div>' : ''}
-          </div>
-        </div>`;
-      });
-      html += '</div>';
-    }
-  }
-  html += '</div>';
-
-  // Section 4: World Model
-  html += `<div style="${sectionStyle}">`;
-  html += `<div style="${titleStyle('#a855f7')}">World Model ${countBadge(wm.length, '#a855f7')}</div>`;
-  if (wm.length === 0) {
-    html += emptyMsg('No behavioral patterns detected yet');
-  } else {
-    const cats = {};
-    wm.forEach(w => { const c = w.category || 'other'; if (!cats[c]) cats[c] = []; cats[c].push(w); });
-    const catColors = {behavior:'#a855f7', schedule:'#60a5fa', topics:'#34d399', correlations:'#f472b6', other:'#94a3b8'};
-    Object.entries(cats).forEach(([cat, entries]) => {
-      html += `<div style="font-size:12px;font-weight:700;color:${catColors[cat]||'#a855f7'};text-transform:uppercase;letter-spacing:1px;margin:12px 0 8px;padding-left:4px">${cat} (${entries.length})</div>`;
-      entries.forEach(w => {
-        const conf = w.confidence || 0;
-        const pct = Math.round(conf * 100);
-        const confColor = conf > 0.7 ? '#34d399' : conf > 0.4 ? '#fbbf24' : '#64748b';
-        const occ = w.occurrences || 1;
-        const lastSeen = w.last_seen ? new Date(w.last_seen).toLocaleDateString('es-UY', {month:'short', day:'numeric'}) : '';
-        html += `<div style="${cardStyle(catColors[cat]||'#a855f7')}">
-          <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px">${(w.pattern || 'Unknown').replace(/</g,'&lt;')}</div>
-          ${w.evidence ? '<div style="color:#64748b;font-size:12px;margin-bottom:6px">' + (typeof w.evidence === 'string' ? w.evidence.replace(/</g,'&lt;') : JSON.stringify(w.evidence)) + '</div>' : ''}
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <span style="font-size:10px;font-weight:600;background:${confColor}22;color:${confColor};padding:2px 8px;border-radius:6px">${pct}% confidence</span>
-            <span style="font-size:10px;font-weight:600;background:rgba(255,255,255,0.05);color:#94a3b8;padding:2px 8px;border-radius:6px">Seen ${occ}x</span>
-            ${lastSeen ? '<span style="font-size:10px;color:#475569">Last: ' + lastSeen + '</span>' : ''}
-            ${w.expires_at ? '<span style="font-size:10px;color:#475569">Exp: ' + new Date(w.expires_at).toLocaleDateString('es-UY',{month:'short',day:'numeric'}) + '</span>' : ''}
-          </div>
-        </div>`;
-      });
-    });
-  }
-  html += '</div>';
-
-  // Section 4b: Insights
-  if (ins.length > 0) {
-    html += `<div style="${sectionStyle}">`;
-    html += `<div style="${titleStyle('#c084fc')}">Insights ${countBadge(ins.length, '#c084fc')}</div>`;
-    ins.forEach(i => {
-      const conf = i.confidence || 0;
-      const pct = Math.round(conf * 100);
-      const confColor = conf > 0.7 ? '#34d399' : conf > 0.4 ? '#fbbf24' : '#64748b';
-      html += `<div style="${cardStyle('#c084fc')}">
-        <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px">${(i.pattern || i.content || 'Unknown').replace(/</g,'&lt;')}</div>
-        ${i.evidence ? '<div style="color:#64748b;font-size:12px;margin-bottom:6px">' + (typeof i.evidence === 'string' ? i.evidence.replace(/</g,'&lt;') : JSON.stringify(i.evidence)) + '</div>' : ''}
-        <span style="font-size:10px;font-weight:600;background:${confColor}22;color:${confColor};padding:2px 8px;border-radius:6px">${pct}% confidence</span>
-      </div>`;
-    });
-    html += '</div>';
-  }
-
-  // Section 6: Importance Keywords
-  html += `<div style="${sectionStyle}">`;
-  html += `<div style="${titleStyle('#38bdf8')}">Importance Keywords ${countBadge(kws.length, '#38bdf8')}</div>`;
-  if (kws.length === 0) {
-    html += emptyMsg('No keywords configured');
-  } else {
-    const byScore = {};
-    kws.forEach(k => { const s = k.score; if (!byScore[s]) byScore[s] = []; byScore[s].push(k); });
-    const scoreLabels = {'1':'Critical (1.0)', '0.8':'High (0.8)', '0.6':'Medium (0.6)'};
-    const scoreColors = {'1':'#ef4444', '0.8':'#f97316', '0.6':'#eab308'};
-    Object.entries(byScore).sort((a,b) => b[0]-a[0]).forEach(([score, items]) => {
-      const sc = parseFloat(score);
-      const label = scoreLabels[String(sc)] || `Score ${sc}`;
-      const color = scoreColors[String(sc)] || '#64748b';
-      html += `<div style="margin-bottom:12px">`;
-      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}</div>`;
-      html += `<div style="display:flex;flex-wrap:wrap;gap:6px">`;
-      items.sort((a,b) => (b.hits||0) - (a.hits||0)).forEach(k => {
-        const hits = k.hits || 0;
-        const opacity = hits > 0 ? 1 : 0.6;
-        html += `<span style="display:inline-flex;align-items:center;gap:4px;background:${color}15;border:1px solid ${color}30;color:${color};padding:3px 10px;border-radius:6px;font-size:12px;font-weight:500;opacity:${opacity}">`;
-        html += `${(k.keyword||'').replace(/</g,'&lt;')}`;
-        if (hits > 0) html += `<span style="font-size:9px;background:${color}25;padding:1px 5px;border-radius:4px;font-weight:700">${hits}</span>`;
-        html += `</span>`;
-      });
-      html += `</div></div>`;
-    });
-  }
-  html += '</div>';
-
-  // Section 7: Proposals
-  html += `<div style="${sectionStyle}">`;
-  html += `<div style="${titleStyle('#f97316')}">Self-Improvement Proposals ${countBadge(prop.length, '#f97316')}</div>`;
-  if (prop.length === 0) {
-    html += emptyMsg('No proposals pending');
-  } else {
-    prop.forEach(p => {
-      const status = p.status || 'pending';
-      const statusColors = {pending:'#f97316', approved:'#34d399', rejected:'#ef4444'};
-      const sc = statusColors[status] || '#64748b';
-      html += `<div style="${cardStyle('#f97316')}">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <div style="font-weight:700;color:#e2e8f0">${(p.description || p.title || 'Untitled').replace(/</g,'&lt;')}</div>
-          <span style="font-size:10px;font-weight:600;background:${sc}22;color:${sc};padding:2px 8px;border-radius:6px">${status}</span>
-        </div>
-        ${p.file_path ? '<div style="font-family:monospace;font-size:11px;color:#64748b;margin-bottom:6px">' + p.file_path.replace(/</g,'&lt;') + '</div>' : ''}
-        ${p.diff ? '<pre style="background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px 12px;font-size:11px;color:#94a3b8;overflow-x:auto;margin:0;line-height:1.5">' + p.diff.replace(/</g,'&lt;') + '</pre>' : ''}
-      </div>`;
-    });
-  }
-  html += '</div>';
-
-  html += '</div>';
-  panel.innerHTML = html;
+  _renderBrainSubNav();
+  _renderBrainOverviewAndKpis();
+  renderGoals();
+  renderPlans();
+  renderCaps();
+  renderWM();
+  renderExperiments();
+  renderMetrics();
+  _renderBrainMemory();
+  _renderBrainSafety();
+  _renderBrainLearning();
 }
+
+function _renderBrainSubNav() {
+  const nav = document.getElementById('brainSubNav');
+  if (!nav || nav.dataset.built === '1') return;
+  const items = [
+    ['brain-overview', '🧠 Overview'],
+    ['brain-goals', '🎯 Goals'],
+    ['brain-memory', '📚 Memory'],
+    ['brain-world', '🌍 World'],
+    ['brain-self', '🧬 Self'],
+    ['brain-safety', '🔍 Safety'],
+    ['brain-learning', '🧪 Learning'],
+    ['brain-metrics', '📊 Metrics'],
+  ];
+  nav.innerHTML = items.map(([id, label]) => `<button onclick="document.getElementById('${id}').scrollIntoView({behavior:'smooth', block:'start'})" style="padding:6px 12px;border-radius:999px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.03);color:#e2e8f0;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">${label}</button>`).join('');
+  nav.dataset.built = '1';
+}
+
+async function _renderBrainOverviewAndKpis() {
+  const ov = document.getElementById('brainOverview');
+  const kp = document.getElementById('brainKpis');
+  ov.innerHTML = '<div style="color:#64748b;font-size:12px">Cargando...</div>';
+  try {
+    const [goals, caps, plans, wmE, wmR, preds, verif, sand, exps, metSum, skills, ents, props] = await Promise.all([
+      fetch('/goal/active').then(r => r.json()).catch(()=>({count:0})),
+      fetch('/capability/list').then(r => r.json()).catch(()=>({count:0,capabilities:[]})),
+      fetch('/plan/list?limit=100').then(r => r.json()).catch(()=>({count:0})),
+      fetch('/wm/entity/list?limit=200').then(r => r.json()).catch(()=>({count:0})),
+      fetch('/wm/relation/list?limit=200').then(r => r.json()).catch(()=>({count:0})),
+      fetch('/wm/prediction/list?limit=200').then(r => r.json()).catch(()=>({count:0,predictions:[]})),
+      fetch('/verify/list?limit=200').then(r => r.json()).catch(()=>({count:0,verifications:[]})),
+      fetch('/sandbox/list?limit=200').then(r => r.json()).catch(()=>({count:0})),
+      fetch('/experiment/list').then(r => r.json()).catch(()=>({count:0})),
+      fetch('/metric/summary').then(r => r.json()).catch(()=>({count:0,metrics:[]})),
+      fetch('/skill/list').then(r => r.json()).catch(()=>({results:[]})),
+      fetch('/entity/search?q=&limit=500').then(r => r.json()).catch(()=>({results:[]})),
+      fetch('/proposal/pending').then(r => r.json()).catch(()=>({results:[]})),
+    ]);
+    const card = (label, value, color, sub) => `<div style="padding:12px 14px;border-radius:10px;border:1px solid ${color}33;background:${color}0a">
+      <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px">${label}</div>
+      <div style="font-size:22px;font-weight:700;color:${color};margin-top:2px">${value}</div>
+      ${sub ? `<div style="font-size:10px;color:#64748b;margin-top:2px">${sub}</div>` : ''}
+    </div>`;
+    ov.innerHTML = [
+      card('Goals activas', goals.count||0, '#c084fc'),
+      card('Plans', plans.count||0, '#60a5fa'),
+      card('Capabilities', caps.count||0, '#34d399'),
+      card('WM entities', wmE.count||0, '#60a5fa'),
+      card('WM relations', wmR.count||0, '#34d399'),
+      card('Predictions', preds.count||0, '#c084fc', ((preds.predictions||[]).filter(p=>p.resolved).length + ' resueltas')),
+      card('Verifications', verif.count||0, '#ef4444'),
+      card('Sandbox runs', sand.count||0, '#f59e0b'),
+      card('Experiments', exps.count||0, '#c084fc'),
+      card('Skills', (skills.results||skills||[]).length, '#22c55e'),
+      card('Entities (identidad)', (ents.results||ents||[]).length, '#f472b6'),
+      card('Proposals pending', (props.results||props||[]).length, '#f97316'),
+    ].join('');
+
+    const km = metSum.metrics || [];
+    const byName = Object.fromEntries(km.map(m=>[m.name, m]));
+    const kpiCard = (name, label, color, transform) => {
+      const m = byName[name];
+      if (!m) return `<div style="padding:12px 14px;border-radius:10px;border:1px solid rgba(100,116,139,0.2);background:rgba(100,116,139,0.03)">
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase">${label}</div>
+        <div style="font-size:16px;color:#475569;margin-top:4px">sin datos</div>
+      </div>`;
+      const val = m.latest.value;
+      const txt = (val!==null && val!==undefined) ? (transform ? transform(val) : val.toFixed(3)) : '—';
+      const weekAvg = (m.week.avg !== null && m.week.avg !== undefined) ? (transform ? transform(m.week.avg) : m.week.avg.toFixed(3)) : '—';
+      return `<div style="padding:12px 14px;border-radius:10px;border:1px solid ${color}33;background:${color}0a">
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase">${label}</div>
+        <div style="font-size:20px;font-weight:700;color:${color};margin-top:2px">${txt}</div>
+        <div style="font-size:10px;color:#64748b;margin-top:2px">7d avg: ${weekAvg} · n=${m.week.samples||0}</div>
+      </div>`;
+    };
+    kp.innerHTML = [
+      kpiCard('hallucination_rate','Hallucination','#ef4444', v => (v*100).toFixed(1)+'%'),
+      kpiCard('calibration_gap','Calibration gap','#f59e0b'),
+      kpiCard('skill_success_rate','Skill success','#34d399', v => (v*100).toFixed(1)+'%'),
+      kpiCard('goals_completed_today','Goals hoy','#c084fc', v => v.toFixed(0)),
+      kpiCard('world_model_precision','WM precision','#60a5fa', v => (v*100).toFixed(0)+'%'),
+      kpiCard('time_to_complete_goal_sec','Avg goal time','#94a3b8', v => v.toFixed(0)+'s'),
+    ].join('');
+  } catch (e) {
+    ov.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`;
+  }
+}
+
+async function _renderBrainMemory() {
+  try {
+    const [ep, sem, proc] = await Promise.all([
+      fetch('/memory/episodic?hours=48&limit=20').then(r => r.json()),
+      fetch('/memory/semantic?limit=30').then(r => r.json()),
+      fetch('/memory/procedural?limit=30').then(r => r.json()),
+    ]);
+    const eps = (ep.events||[]).map(e => {
+      const color = e.source === 'conversation' ? '#60a5fa' : '#c084fc';
+      const label = e.role || e.category || e.source || '';
+      const ts = (e.timestamp||'').slice(11,16);
+      return `<div style="padding:6px 10px;border-radius:6px;border-left:2px solid ${color};background:rgba(255,255,255,0.02)">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#64748b"><span>${escapeHtml(label)}</span><span>${ts}</span></div>
+        <div style="font-size:12px;color:#e2e8f0;margin-top:2px">${escapeHtml((e.content||e.pattern||'').slice(0,140))}</div>
+      </div>`;
+    }).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
+    document.getElementById('memEpisodic').innerHTML = eps;
+
+    const mems = (sem.memories||[]).map(m => `<div style="padding:8px 10px;border-radius:8px;background:rgba(52,211,153,0.03);border:1px solid rgba(52,211,153,0.12)">
+      <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(m.name||'—')} <span style="font-size:9px;color:#64748b">[${escapeHtml(m.type||'')}]</span></div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml((m.description||m.content||'').slice(0,120))}</div>
+      <div style="font-size:10px;color:#64748b;margin-top:2px">conf ${(m.confidence||0).toFixed(2)}${m.last_verified?' · verified '+m.last_verified.slice(0,10):''}</div>
+    </div>`).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
+    document.getElementById('memSemanticMemories').innerHTML = mems;
+
+    const ents = (sem.entities||[]).map(e => {
+      let det = '';
+      try { const d = JSON.parse(e.details||'{}'); det = Object.values(d).filter(v=>typeof v==='string').slice(0,2).join(' · '); } catch(_){}
+      return `<div style="padding:8px 10px;border-radius:8px;background:rgba(244,114,182,0.03);border:1px solid rgba(244,114,182,0.12)">
+        <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(e.name)} <span style="font-size:9px;color:#64748b">[${escapeHtml(e.type||'')}]</span></div>
+        ${det?`<div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml(det)}</div>`:''}
+      </div>`;
+    }).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
+    document.getElementById('memEntities').innerHTML = ents;
+
+    const sks = (proc.skills||[]).map(s => {
+      const maturityColor = {draft:'#64748b', beta:'#f59e0b', stable:'#22c55e', deprecated:'#ef4444'}[s.maturity||'draft'];
+      const srate = s.success_rate!==null ? Math.round(s.success_rate*100)+'%' : '—';
+      return `<div style="padding:8px 10px;border-radius:8px;background:rgba(34,197,94,0.03);border:1px solid rgba(34,197,94,0.12)">
+        <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(s.name||'—')}</span><span style="font-size:9px;color:${maturityColor};background:${maturityColor}22;padding:2px 6px;border-radius:4px">${s.maturity||'draft'}</span></div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml((s.description||'').slice(0,100))}</div>
+        <div style="font-size:10px;color:#64748b;margin-top:3px">used ${s.times_used||0}x · ✓${s.success_count||0} ✗${s.failure_count||0} · rate ${srate}</div>
+      </div>`;
+    }).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
+    document.getElementById('memProcedural').innerHTML = sks;
+  } catch (e) {
+    document.getElementById('memEpisodic').innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`;
+  }
+}
+
+async function _renderBrainSafety() {
+  try {
+    const [ver, sand] = await Promise.all([
+      fetch('/verify/list?limit=20').then(r => r.json()),
+      fetch('/sandbox/list?limit=20').then(r => r.json()),
+    ]);
+    const vers = (ver.verifications||[]).map(v => {
+      const c = v.passed ? '#34d399' : '#ef4444';
+      return `<div style="padding:8px 10px;border-radius:8px;background:${c}0a;border:1px solid ${c}22">
+        <div style="display:flex;justify-content:space-between"><span style="font-size:11px;color:#e2e8f0;font-weight:600">${escapeHtml(v.check_type)} · ${escapeHtml(v.subject_type)}/${escapeHtml(v.subject_id)}</span><span style="font-size:10px;color:${c}">${v.passed?'✓':'✗'} ${(v.confidence||0).toFixed(2)}</span></div>
+        ${v.reason?`<div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml(v.reason)}</div>`:''}
+        ${v.halluc_risk>0?`<div style="font-size:10px;color:#ef4444;margin-top:2px">halluc risk ${v.halluc_risk.toFixed(2)}</div>`:''}
+      </div>`;
+    }).join('') || '<div style="color:#64748b;font-size:11px">(sin verificaciones)</div>';
+    document.getElementById('brainVerifications').innerHTML = vers;
+
+    const sbs = (sand.executions||[]).map(s => {
+      const modeColor = {'dry-run':'#64748b','simulation':'#f59e0b','live':'#ef4444'}[s.mode]||'#64748b';
+      return `<div style="padding:8px 10px;border-radius:8px;background:${modeColor}0a;border:1px solid ${modeColor}22">
+        <div style="display:flex;justify-content:space-between"><span style="font-size:11px;color:#e2e8f0;font-weight:600">${escapeHtml(s.action)}</span><span style="font-size:9px;color:${modeColor};font-weight:700">${s.mode}</span></div>
+        <div style="font-size:10px;color:#64748b;margin-top:2px">verdict: ${escapeHtml(s.verdict||'—')} · cost ${(s.predicted_cost||0).toFixed(3)} · ${(s.predicted_time_sec||0).toFixed(1)}s</div>
+      </div>`;
+    }).join('') || '<div style="color:#64748b;font-size:11px">(sin ejecuciones)</div>';
+    document.getElementById('brainSandbox').innerHTML = sbs;
+  } catch (e) {
+    document.getElementById('brainVerifications').innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`;
+  }
+}
+
+async function _renderBrainLearning() {
+  const grid = document.getElementById('brainLearnGrid');
+  grid.innerHTML = '<div style="color:#64748b;font-size:12px">Cargando...</div>';
+  try {
+    const [pref, refl, wm, ins, props, kws] = await Promise.all([
+      fetch('/preference/list').then(r=>r.json()).catch(()=>({results:[]})),
+      fetch('/reflection/list').then(r=>r.json()).catch(()=>({results:[]})),
+      fetch('/worldmodel/active').then(r=>r.json()).catch(()=>({results:[]})),
+      fetch('/insight/active').then(r=>r.json()).catch(()=>({results:[]})),
+      fetch('/proposal/pending').then(r=>r.json()).catch(()=>({results:[]})),
+      fetch('/keywords').then(r=>r.json()).catch(()=>({results:[]})),
+    ]);
+    const pr = pref.results || pref || [];
+    const rf = refl.results || refl || [];
+    const wmi = wm.results || wm || [];
+    const insi = ins.results || ins || [];
+    const prop = props.results || props || [];
+    const kwi = kws.results || kws || [];
+
+    const section = (title, color, body) => `<div style="padding:12px;border-radius:10px;border:1px solid ${color}22;background:${color}05">
+      <h3 style="color:${color};font-size:12px;font-weight:700;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:0.5px">${title}</h3>
+      ${body}
+    </div>`;
+
+    const prefsHtml = pr.length ? pr.map(p => {
+      const pct = Math.round((p.confidence||0)*100);
+      return `<div style="padding:6px 10px;border-radius:6px;background:rgba(34,211,238,0.05);margin-bottom:4px">
+        <div style="font-size:12px;color:#e2e8f0">${escapeHtml(p.rule||p.key||'—')}</div>
+        <div style="font-size:10px;color:#22d3ee">${pct}% confidence</div>
+      </div>`;
+    }).join('') : '<div style="color:#64748b;font-size:11px">(ninguna)</div>';
+
+    const reflsHtml = rf.length ? rf.slice(0,5).map(r => {
+      const date = r.created_at ? new Date(r.created_at).toLocaleDateString('es-UY',{month:'short',day:'numeric'}) : '—';
+      const summary = (r.summary||r.analysis||r.content||'').slice(0,140);
+      return `<div style="padding:6px 10px;border-radius:6px;background:rgba(234,179,8,0.05);margin-bottom:4px">
+        <div style="font-size:10px;color:#eab308">${date}</div>
+        <div style="font-size:11px;color:#e2e8f0;margin-top:2px">${escapeHtml(summary)}</div>
+      </div>`;
+    }).join('') : '<div style="color:#64748b;font-size:11px">(ninguna)</div>';
+
+    const wmHtml = wmi.length ? wmi.slice(0,8).map(w => {
+      const conf = Math.round((w.confidence||0)*100);
+      return `<div style="padding:6px 10px;border-radius:6px;background:rgba(168,85,247,0.05);margin-bottom:4px">
+        <div style="font-size:11px;color:#e2e8f0">${escapeHtml(w.pattern||'—')}</div>
+        <div style="font-size:10px;color:#a855f7">${escapeHtml(w.category||'—')} · ${conf}%</div>
+      </div>`;
+    }).join('') : '<div style="color:#64748b;font-size:11px">(ninguno)</div>';
+
+    const insHtml = insi.length ? insi.slice(0,6).map(i => `<div style="padding:6px 10px;border-radius:6px;background:rgba(192,132,252,0.05);margin-bottom:4px">
+      <div style="font-size:11px;color:#e2e8f0">${escapeHtml((i.pattern||i.content||'').slice(0,140))}</div>
+      <div style="font-size:10px;color:#c084fc">${(i.confidence!=null?Math.round(i.confidence*100)+'% · ':'')}${escapeHtml(i.type||'')}</div>
+    </div>`).join('') : '<div style="color:#64748b;font-size:11px">(ninguno)</div>';
+
+    const propHtml = prop.length ? prop.map(p => `<div style="padding:6px 10px;border-radius:6px;background:rgba(249,115,22,0.05);margin-bottom:4px">
+      <div style="font-size:11px;color:#e2e8f0;font-weight:600">${escapeHtml(p.description||p.title||'—')}</div>
+      ${p.file_path?`<div style="font-family:monospace;font-size:10px;color:#64748b;margin-top:2px">${escapeHtml(p.file_path)}</div>`:''}
+    </div>`).join('') : '<div style="color:#64748b;font-size:11px">(ninguna)</div>';
+
+    const kwHtml = kwi.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px">${kwi.slice(0,30).map(k => `<span style="font-size:10px;padding:2px 8px;border-radius:999px;background:rgba(56,189,248,0.1);color:#38bdf8;font-family:monospace">${escapeHtml(k.keyword)} <span style="opacity:0.6">(${k.hits||0})</span></span>`).join('')}</div>` : '<div style="color:#64748b;font-size:11px">(ninguna)</div>';
+
+    grid.innerHTML =
+      section('🔵 Preferences inferidas', '#22d3ee', prefsHtml) +
+      section('🟡 Reflections (últimas 5)', '#eab308', reflsHtml) +
+      section('🟣 World model — observaciones blandas', '#a855f7', wmHtml) +
+      section('💜 Insights', '#c084fc', insHtml) +
+      section('🟠 Proposals pending', '#f97316', propHtml) +
+      section('🔷 Importance keywords', '#38bdf8', kwHtml);
+  } catch (e) {
+    grid.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`;
+  }
+}
+
 
 // === Goal Engine ===
 async function renderGoals() {
@@ -1773,7 +1804,7 @@ async function renderMetrics() {
 
 // Restore tab from hash (after all data is defined)
 const hashTab = location.hash.replace('#','');
-if (['logs','graph','arch','rag','brain','goals','caps','plans','wm','exp','metrics'].includes(hashTab)) switchTab(hashTab);
+if (['logs','graph','arch','rag','brain'].includes(hashTab)) switchTab(hashTab);
 </script>
 </body>
 </html>
