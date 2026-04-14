@@ -1,63 +1,105 @@
 # Memory Graph
 
-D3.js force-directed graph visualization for Friday's memory system.
+Visual audit surface + memory API for [Friday](https://github.com/missingus3r/friday-showcase), a 24/7 AI assistant built on Claude Code.
 
-## Features
+Flask + SQLite backend, single-file D3.js frontend. No external DB, no vector store, no framework — just one Python file and one HTML file.
 
-- **Graph** — Interactive force-directed graph showing memory nodes and relationships (conversations, memories, entities)
-- **Logs** — Chronological view of all conversation logs with collapsible date groups
-- **Architecture** — System architecture diagram with 26 nodes and 29 connections (data/control/monitoring)
-- **RAG** — Semantic search dashboard with hybrid search (cosine similarity + keyword matching)
+**Version:** 2.4.1 — see `VERSION` constant in [api_server.py](api_server.py).
 
-## Stack
+## Tabs
 
-- **Frontend**: Single-file HTML with D3.js v7, vanilla JS
-- **Backend**: Flask + SQLite memory API (`api_server.py`) on port 7777
-- **RAG**: Gemini Embedding 001 (3072 dim), cosine similarity, RRF hybrid ranking
+Six tabs served at `/graph`:
 
-## Setup
-
-1. Start the memory API server:
-```bash
-cd ~/proyectos/memory-graph
-source venv/bin/activate
-FRIDAY_DB_PATH=~/.claude/memory.db python3 api_server.py
-```
-
-2. Access the graph at `http://localhost:7777/graph`
-
-## API Endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /health` | Health check |
-| `GET /graph` | Serve Memory Graph UI |
-| `GET /conversation/recent` | Get recent conversation logs |
-| `GET /memory/list` | List all memories |
-| `GET /entity/search?q=` | Search entities |
-| `GET /search/semantic?q=` | Semantic search (RAG) |
-| `GET /search/hybrid?q=` | Hybrid search (semantic + keyword) |
-| `GET /kv/<key>` | Key-value storage (node positions) |
-
-## Architecture
-
-The graph connects to the memory API which stores:
-- **Conversations**: User/assistant/system messages with timestamps
-- **Memories**: Long-term storage (user, feedback, project, reference types)
-- **Entities**: People, companies, tools, concepts
-- **Embeddings**: 3072-dim vectors for semantic search (Gemini Embedding 001)
+- **Graph** — force-directed D3.js visualization of conversations, memories and entities as interactive color-coded nodes (drag / zoom / filter).
+- **Logs** — chronological view of conversation logs with collapsible date groups and live search.
+- **Arch** — system architecture diagram with draggable nodes. Positions persist server-side via `/kv/<key>`.
+- **RAG** — semantic search dashboard: hybrid search (FTS5 + cosine RRF), embedding stats, reindex trigger.
+- **Brain** — consolidated audit surface for Friday's self-improving harness (Goals, Plans, three-layer Memory, causal World Model, Capabilities + Autonomy, Verifier + Sandbox, Experiments, Metrics). Sticky sub-nav, responsive grid. See the [harness deep-dive](https://missingus3r.github.io/friday-showcase/harness.html).
+- **Crons** — two-column diff: runtime-active jobs with live countdowns to next fire, vs the prompts persisted in `~/.claude/cron-prompts.md`, with `sincronizado` / `⚠ no corriendo` badges.
 
 ## Screenshots
 
-### Graph Tab
-Force-directed graph with color-coded nodes by type. Click to expand, drag to reposition.
+### Graph
+![Graph tab](img/graph.png)
 
-### Architecture Tab
-Fixed-position system diagram with draggable nodes. Positions persist server-side via `/kv` endpoint.
+### Logs
+![Logs tab](img/logs.png)
 
-### RAG Tab
-Search dashboard showing semantic similarity scores, hybrid ranking, and embedding statistics.
+### Architecture
+![Architecture tab](img/arch.png)
+
+### RAG
+![RAG tab](img/rag.png)
+
+### Brain
+![Brain tab](img/brain.png)
+
+### Crons
+![Crons tab](img/crons.png)
+
+## Stack
+
+- **Frontend**: Single-file HTML with D3.js v7 and vanilla JS.
+- **Backend**: Flask + SQLite memory API (`api_server.py`) on port 7777.
+- **RAG**: Gemini Embedding 001 (3072 dim), cosine similarity, RRF hybrid ranking, FTS5 for lexical.
+- **Self-improving harness** (v2): 13 extra tables — `goals`, `plan_tree`, `capabilities`, `autonomy_levels`, `wm_entities`, `wm_relations`, `wm_events`, `wm_predictions`, `verifications`, `sandbox_executions`, `experiments`, `metrics`, `active_crons` — plus additive columns on existing ones (`provenance`, `confidence`, `last_verified`, `layer`, skill maturity, etc). All migrations are `ALTER TABLE … IF NOT EXISTS` style, so older databases upgrade in place.
+
+## Setup
+
+```bash
+cd ~/proyectos/memory-graph
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+FRIDAY_DB_PATH=~/.claude/memory.db python3 api_server.py
+```
+
+Open `http://localhost:7777/graph`.
+
+## API — core endpoints
+
+The full API has grown past 100 endpoints. Core ones:
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` / `GET /version` | Health + version |
+| `GET /graph` | Serve the dashboard HTML |
+| `POST /conversation/log` | Log a message `{role, content, channel}` with auto-importance scoring |
+| `GET /conversation/recent` / `search` / `stats` | Read logs |
+| `POST /memory` / `GET /memory/list` / `/recall` / `/search` | Long-term memories (typed: user / feedback / project / reference) |
+| `GET /memory/episodic` / `/semantic` / `/procedural` | v2 three-layer views |
+| `POST /memory/<id>/verify` / `POST /memory/decay` | v2 confidence decay + re-verify |
+| `POST /entity` / `GET /entity/search` | Identity entities (who/what things ARE) |
+| `POST /wm/entity` / `/relation` / `/event` / `/prediction` | v2 structured world model (state, S-P-O, causal events, testable predictions) |
+| `POST /goal` / `GET /goal/active` / `/next` / `PATCH /goal/<id>` | v2 goal engine |
+| `POST /plan` / `POST /plan/<plan_id>/node` | v2 hierarchical plan trees |
+| `POST /capability/<n>/record` / `GET /capability/can` | v2 calibrated self-knowledge |
+| `POST /autonomy/check` | v2 autonomy gate (L0 suggest → L5 self-modify) |
+| `POST /verify` | v2 factual / consistency / hallucination checks |
+| `POST /sandbox/execute` | v2 dry-run / simulation / live |
+| `POST /experiment` / `/observation` / `PATCH /conclude` | v2 A/B experiments |
+| `POST /metric` / `GET /metric/summary` | v2 KPI framework (11 known metrics) |
+| `GET /search/semantic` / `/search/hybrid` | RAG |
+| `GET /embeddings/stats` / `POST /embeddings/reindex` | Embeddings ops |
+| `GET /kv/<key>` / `PUT /kv/<key>` | Key-value store (dashboard positions, etc) |
+| `POST /cron/active` / `GET /cron/active` / `GET /cron/prompts` | Runtime cron snapshot + disk prompt parser |
+
+Full table ownership notes and the soft-observation → structured-knowledge promotion flow live in Friday's `CLAUDE.md` and in the [harness deep-dive](https://missingus3r.github.io/friday-showcase/harness.html).
+
+## Architecture
+
+The server is the single source of truth for everything Friday remembers, believes, plans or measures. Four broad concerns share one SQLite file:
+
+- **Conversations** — raw message log, with importance classification, FTS5 index, and 3072-dim Gemini embeddings stored as BLOBs.
+- **Long-term memory** — typed memories, entities, skills. Each row now carries provenance + confidence + last_verified.
+- **Self-improving harness** — goals, plans, capabilities, autonomy, world model, verifier, sandbox, experiments, metrics. All additive.
+- **Runtime state** — active cron snapshot, importance keywords, KV store.
+
+## Related
+
+- [friday-showcase](https://github.com/missingus3r/friday-showcase) — the 24/7 Claude Code assistant that writes to this memory server.
+- [harness.html](https://missingus3r.github.io/friday-showcase/harness.html) — technical deep-dive on the v2 self-evolving harness.
 
 ---
 
-Built by [Bruno Silveira](https://github.com/missingus3r) with [Friday](https://github.com/openclaw/openclaw) AI assistant.
+Built by [Bruno Silveira](https://github.com/missingus3r) with [Friday](https://github.com/missingus3r/friday-showcase).
