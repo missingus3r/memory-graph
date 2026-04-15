@@ -258,18 +258,18 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
       <p style="color:#64748b;font-size:12px;margin:0 0 14px 0">Tres capas: episódica (qué pasó), semántica (qué es verdad estable), procedimental (cómo hacer).</p>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
         <div>
-          <h3 style="color:#60a5fa;font-size:13px;font-weight:700;margin:0 0 8px 0">📜 Episódica (últimas 48h)</h3>
-          <div id="memEpisodic" style="display:grid;gap:6px"></div>
+          <h3 onclick="toggleBrainCollapse('episodic')" style="color:#60a5fa;font-size:13px;font-weight:700;margin:0 0 8px 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none"><span>📜 Episódica (últimas 48h) <span id="cntEpisodic" style="color:#64748b;font-weight:400;font-size:11px"></span></span><span id="chevEpisodic" style="color:#64748b;font-size:11px">▼</span></h3>
+          <div id="wrapEpisodic"><div id="memEpisodic" style="display:grid;gap:6px"></div></div>
         </div>
         <div>
-          <h3 style="color:#34d399;font-size:13px;font-weight:700;margin:0 0 8px 0">💎 Semántica — Memorias</h3>
-          <div id="memSemanticMemories" style="display:grid;gap:6px"></div>
-          <h3 style="color:#f472b6;font-size:13px;font-weight:700;margin:14px 0 8px 0">👤 Semántica — Entidades (identidad)</h3>
-          <div id="memEntities" style="display:grid;gap:6px"></div>
+          <h3 onclick="toggleBrainCollapse('semantic')" style="color:#34d399;font-size:13px;font-weight:700;margin:0 0 8px 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none"><span>💎 Semántica — Memorias <span id="cntSemantic" style="color:#64748b;font-weight:400;font-size:11px"></span></span><span id="chevSemantic" style="color:#64748b;font-size:11px">▼</span></h3>
+          <div id="wrapSemantic"><div id="memSemanticMemories" style="display:grid;gap:6px"></div></div>
+          <h3 onclick="toggleBrainCollapse('entities')" style="color:#f472b6;font-size:13px;font-weight:700;margin:14px 0 8px 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none"><span>👤 Semántica — Entidades (identidad) <span id="cntEntities" style="color:#64748b;font-weight:400;font-size:11px"></span></span><span id="chevEntities" style="color:#64748b;font-size:11px">▼</span></h3>
+          <div id="wrapEntities"><div id="memEntities" style="display:grid;gap:6px"></div></div>
         </div>
         <div>
-          <h3 style="color:#22c55e;font-size:13px;font-weight:700;margin:0 0 8px 0">⚙️ Procedimental — Skills</h3>
-          <div id="memProcedural" style="display:grid;gap:6px"></div>
+          <h3 onclick="toggleBrainCollapse('skills')" style="color:#22c55e;font-size:13px;font-weight:700;margin:0 0 8px 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none"><span>⚙️ Procedimental — Skills <span id="cntSkills" style="color:#64748b;font-weight:400;font-size:11px"></span></span><span id="chevSkills" style="color:#64748b;font-size:11px">▼</span></h3>
+          <div id="wrapSkills"><div id="memProcedural" style="display:grid;gap:6px"></div></div>
         </div>
       </div>
     </section>
@@ -1521,51 +1521,143 @@ async function _renderBrainOverviewAndKpis() {
   }
 }
 
+window._brainCache = window._brainCache || {};
+window._brainExpanded = window._brainExpanded || { episodic:false, semantic:false, entities:false, skills:false };
+window._brainCollapsed = window._brainCollapsed || {};
+const BRAIN_INITIAL_LIMIT = 10;
+
+function toggleBrainCollapse(key) {
+  window._brainCollapsed[key] = !window._brainCollapsed[key];
+  const wrapMap = { episodic:'wrapEpisodic', semantic:'wrapSemantic', entities:'wrapEntities', skills:'wrapSkills' };
+  const chevMap = { episodic:'chevEpisodic', semantic:'chevSemantic', entities:'chevEntities', skills:'chevSkills' };
+  const wrap = document.getElementById(wrapMap[key]);
+  const chev = document.getElementById(chevMap[key]);
+  if (!wrap) return;
+  const collapsed = window._brainCollapsed[key];
+  wrap.style.display = collapsed ? 'none' : 'block';
+  if (chev) chev.textContent = collapsed ? '▶' : '▼';
+}
+
+function toggleBrainShowAll(key) {
+  window._brainExpanded[key] = !window._brainExpanded[key];
+  _renderBrainMemory();
+}
+
+function openBrainDetail(key, idx) {
+  const item = (window._brainCache[key]||[])[idx];
+  if (!item) return;
+  let html = '';
+  const row = (label, val) => val ? `<div class="modal-row"><b>${label}:</b> ${escapeHtml(String(val))}</div>` : '';
+  const pre = (label, val) => val ? `<div class="modal-details"><b>${label}:</b><br><pre style="white-space:pre-wrap;color:#cbd5e1;font-family:inherit;font-size:12px;margin:6px 0 0 0">${escapeHtml(String(val))}</pre></div>` : '';
+  if (key === 'semantic') {
+    html = `<h2 style="color:#34d399;margin-top:0">💎 ${escapeHtml(item.name||'—')}</h2>
+      ${row('Tipo', item.type)}
+      ${row('Confidence', (item.confidence||0).toFixed(2))}
+      ${row('Last verified', (item.last_verified||'').slice(0,19))}
+      ${row('Created', (item.created_at||'').slice(0,19))}
+      ${pre('Description', item.description)}
+      ${pre('Content', item.content)}
+      ${item.id!=null?`<div style="margin-top:14px;display:flex;gap:8px"><button onclick="deleteBrainMemory(${item.id})" style="padding:6px 12px;border-radius:6px;border:1px solid #ef4444;background:rgba(239,68,68,0.1);color:#ef4444;font-size:11px;cursor:pointer">🗑 Eliminar</button></div>`:''}`;
+  } else if (key === 'entities') {
+    let detailsObj = {};
+    try { detailsObj = JSON.parse(item.details||'{}'); } catch(_) {}
+    html = `<h2 style="color:#f472b6;margin-top:0">👤 ${escapeHtml(item.name||'—')}</h2>
+      ${row('Tipo', item.type)}
+      ${row('Created', (item.created_at||'').slice(0,19))}
+      ${row('Updated', (item.updated_at||'').slice(0,19))}
+      ${Object.keys(detailsObj).length?`<div class="modal-details"><b>Detalles:</b><br><pre style="white-space:pre-wrap;color:#cbd5e1;font-family:inherit;font-size:12px;margin:6px 0 0 0">${escapeHtml(JSON.stringify(detailsObj,null,2))}</pre></div>`:''}`;
+  } else if (key === 'skills') {
+    const maturityColor = {draft:'#64748b', beta:'#f59e0b', stable:'#22c55e', deprecated:'#ef4444'}[item.maturity||'draft'];
+    const srate = item.success_rate!=null ? Math.round(item.success_rate*100)+'%' : '—';
+    html = `<h2 style="color:#22c55e;margin-top:0">⚙️ ${escapeHtml(item.name||'—')}</h2>
+      <div class="modal-row"><b>Maturity:</b> <span style="color:${maturityColor};background:${maturityColor}22;padding:2px 8px;border-radius:4px;font-size:11px">${item.maturity||'draft'}</span></div>
+      ${row('Times used', item.times_used)}
+      ${row('Success', `${item.success_count||0} · fail ${item.failure_count||0} · rate ${srate}`)}
+      ${row('Created', (item.created_at||'').slice(0,19))}
+      ${pre('Description', item.description)}
+      ${pre('Trigger pattern', item.trigger_pattern)}
+      ${pre('Steps', item.steps)}`;
+  } else if (key === 'episodic') {
+    html = `<h2 style="color:#60a5fa;margin-top:0">📜 Evento episódico</h2>
+      ${row('Role / category', item.role || item.category || '—')}
+      ${row('Source', item.source)}
+      ${row('Channel', item.channel)}
+      ${row('Timestamp', (item.timestamp||'').slice(0,19))}
+      ${row('Importance', item.importance!=null?item.importance.toFixed(2):null)}
+      ${pre('Content', item.content || item.pattern)}`;
+  }
+  document.getElementById('archModalContent').innerHTML = html;
+  document.getElementById('archModal').style.display = 'block';
+  document.getElementById('archOverlay').style.display = 'block';
+}
+
+async function deleteBrainMemory(id) {
+  if (!confirm('¿Eliminar esta memoria?')) return;
+  try {
+    await fetch(`/memory/${id}`, { method: 'DELETE' });
+    closeArchModal();
+    _renderBrainMemory();
+  } catch (e) { alert('Error: '+e.message); }
+}
+
+function _brainRenderList(key, items, renderCardFn, emptyMsg='(vacío)') {
+  window._brainCache[key] = items;
+  const total = items.length;
+  const countEl = document.getElementById({episodic:'cntEpisodic',semantic:'cntSemantic',entities:'cntEntities',skills:'cntSkills'}[key]);
+  if (countEl) countEl.textContent = total ? `(${total})` : '(0)';
+  if (!total) return `<div style="color:#64748b;font-size:11px">${emptyMsg}</div>`;
+  const expanded = window._brainExpanded[key];
+  const visible = expanded ? items : items.slice(0, BRAIN_INITIAL_LIMIT);
+  const cards = visible.map((it, i) => renderCardFn(it, i)).join('');
+  let btn = '';
+  if (total > BRAIN_INITIAL_LIMIT) {
+    btn = `<button onclick="toggleBrainShowAll('${key}')" style="margin-top:8px;padding:6px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.03);color:#94a3b8;font-size:11px;cursor:pointer;width:100%">${expanded?`▲ Colapsar`:`▼ Ver todas (${total})`}</button>`;
+  }
+  return `<div style="display:grid;gap:6px">${cards}</div>${btn}`;
+}
+
 async function _renderBrainMemory() {
   try {
     const [ep, sem, proc] = await Promise.all([
-      fetch('/memory/episodic?hours=48&limit=20').then(r => r.json()),
-      fetch('/memory/semantic?limit=30').then(r => r.json()),
-      fetch('/memory/procedural?limit=30').then(r => r.json()),
+      fetch('/memory/episodic?hours=48&limit=200').then(r => r.json()),
+      fetch('/memory/semantic?limit=500').then(r => r.json()),
+      fetch('/memory/procedural?limit=200').then(r => r.json()),
     ]);
-    const eps = (ep.events||[]).map(e => {
+
+    document.getElementById('memEpisodic').innerHTML = _brainRenderList('episodic', ep.events||[], (e, i) => {
       const color = e.source === 'conversation' ? '#60a5fa' : '#c084fc';
       const label = e.role || e.category || e.source || '';
       const ts = (e.timestamp||'').slice(11,16);
-      return `<div style="padding:6px 10px;border-radius:6px;border-left:2px solid ${color};background:rgba(255,255,255,0.02)">
+      return `<div onclick="openBrainDetail('episodic',${i})" style="padding:6px 10px;border-radius:6px;border-left:2px solid ${color};background:rgba(255,255,255,0.02);cursor:pointer" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='rgba(255,255,255,0.02)'">
         <div style="display:flex;justify-content:space-between;font-size:10px;color:#64748b"><span>${escapeHtml(label)}</span><span>${ts}</span></div>
         <div style="font-size:12px;color:#e2e8f0;margin-top:2px">${escapeHtml((e.content||e.pattern||'').slice(0,140))}</div>
       </div>`;
-    }).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
-    document.getElementById('memEpisodic').innerHTML = eps;
+    });
 
-    const mems = (sem.memories||[]).map(m => `<div style="padding:8px 10px;border-radius:8px;background:rgba(52,211,153,0.03);border:1px solid rgba(52,211,153,0.12)">
+    document.getElementById('memSemanticMemories').innerHTML = _brainRenderList('semantic', sem.memories||[], (m, i) => `<div onclick="openBrainDetail('semantic',${i})" style="padding:8px 10px;border-radius:8px;background:rgba(52,211,153,0.03);border:1px solid rgba(52,211,153,0.12);cursor:pointer" onmouseover="this.style.background='rgba(52,211,153,0.08)'" onmouseout="this.style.background='rgba(52,211,153,0.03)'">
       <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(m.name||'—')} <span style="font-size:9px;color:#64748b">[${escapeHtml(m.type||'')}]</span></div>
       <div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml((m.description||m.content||'').slice(0,120))}</div>
       <div style="font-size:10px;color:#64748b;margin-top:2px">conf ${(m.confidence||0).toFixed(2)}${m.last_verified?' · verified '+m.last_verified.slice(0,10):''}</div>
-    </div>`).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
-    document.getElementById('memSemanticMemories').innerHTML = mems;
+    </div>`);
 
-    const ents = (sem.entities||[]).map(e => {
+    document.getElementById('memEntities').innerHTML = _brainRenderList('entities', sem.entities||[], (e, i) => {
       let det = '';
       try { const d = JSON.parse(e.details||'{}'); det = Object.values(d).filter(v=>typeof v==='string').slice(0,2).join(' · '); } catch(_){}
-      return `<div style="padding:8px 10px;border-radius:8px;background:rgba(244,114,182,0.03);border:1px solid rgba(244,114,182,0.12)">
+      return `<div onclick="openBrainDetail('entities',${i})" style="padding:8px 10px;border-radius:8px;background:rgba(244,114,182,0.03);border:1px solid rgba(244,114,182,0.12);cursor:pointer" onmouseover="this.style.background='rgba(244,114,182,0.08)'" onmouseout="this.style.background='rgba(244,114,182,0.03)'">
         <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(e.name)} <span style="font-size:9px;color:#64748b">[${escapeHtml(e.type||'')}]</span></div>
         ${det?`<div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml(det)}</div>`:''}
       </div>`;
-    }).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
-    document.getElementById('memEntities').innerHTML = ents;
+    });
 
-    const sks = (proc.skills||[]).map(s => {
+    document.getElementById('memProcedural').innerHTML = _brainRenderList('skills', proc.skills||[], (s, i) => {
       const maturityColor = {draft:'#64748b', beta:'#f59e0b', stable:'#22c55e', deprecated:'#ef4444'}[s.maturity||'draft'];
-      const srate = s.success_rate!==null ? Math.round(s.success_rate*100)+'%' : '—';
-      return `<div style="padding:8px 10px;border-radius:8px;background:rgba(34,197,94,0.03);border:1px solid rgba(34,197,94,0.12)">
+      const srate = s.success_rate!=null ? Math.round(s.success_rate*100)+'%' : '—';
+      return `<div onclick="openBrainDetail('skills',${i})" style="padding:8px 10px;border-radius:8px;background:rgba(34,197,94,0.03);border:1px solid rgba(34,197,94,0.12);cursor:pointer" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='rgba(34,197,94,0.03)'">
         <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(s.name||'—')}</span><span style="font-size:9px;color:${maturityColor};background:${maturityColor}22;padding:2px 6px;border-radius:4px">${s.maturity||'draft'}</span></div>
         <div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml((s.description||'').slice(0,100))}</div>
         <div style="font-size:10px;color:#64748b;margin-top:3px">used ${s.times_used||0}x · ✓${s.success_count||0} ✗${s.failure_count||0} · rate ${srate}</div>
       </div>`;
-    }).join('') || '<div style="color:#64748b;font-size:11px">(vacío)</div>';
-    document.getElementById('memProcedural').innerHTML = sks;
+    });
   } catch (e) {
     document.getElementById('memEpisodic').innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`;
   }
