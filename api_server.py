@@ -110,7 +110,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.5.0"
+VERSION = "2.5.1"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -703,7 +703,7 @@ def conversation_search():
 @app.route("/conversation/recent")
 def conversation_recent():
     db = get_db()
-    limit = safe_int(request.args.get("limit", "50"), default=50)
+    limit = safe_int(request.args.get("limit", "50"), default=50, max_val=100000)
     channel = request.args.get("channel", "")
 
     sql = "SELECT id, timestamp, role, content, channel, session_id FROM conversations"

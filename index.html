@@ -692,7 +692,7 @@ function buildGraph(conversations, memories, reflections, skills, preferences, i
 async function fetchData() {
   try {
     const [convRes, memRes, reflRes, skillRes, prefRes, insightRes, proposalRes] = await Promise.all([
-      fetch(API+'/conversation/recent?limit=1000').then(r=>r.json()),
+      fetch(API+'/conversation/recent?limit=100000').then(r=>r.json()),
       fetch(API+'/memory/list').then(r=>r.json()),
       fetch(API+'/reflection/list').then(r=>r.json()).catch(()=>[]),
       fetch(API+'/skill/list').then(r=>r.json()).catch(()=>[]),
