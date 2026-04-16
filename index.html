@@ -1432,6 +1432,47 @@ async function renderBrain() {
   _renderBrainMemory();
   _renderBrainSafety();
   _renderBrainLearning();
+  _renderHarnessActivity();
+}
+
+async function _renderHarnessActivity() {
+  try {
+    const res = await fetch('/harness/activity?days=7').then(r => r.json());
+    const a = res.activity || {};
+    window._harnessActivity = a;
+    // Map each Brain section to its backing tables
+    const sectionTables = {
+      'brain-goals':       ['goals', 'plan_tree'],
+      'brain-memory':      ['memories', 'entities', 'skills'],
+      'brain-world':       ['wm_entities', 'wm_relations', 'wm_events', 'wm_predictions', 'world_model'],
+      'brain-self':        ['capabilities'],
+      'brain-safety':      ['verifications', 'sandbox_executions'],
+      'brain-learning':    ['experiments', 'reflections', 'insights', 'preferences', 'proposals'],
+      'brain-metrics':     ['metrics'],
+    };
+    for (const [sectionId, tables] of Object.entries(sectionTables)) {
+      const section = document.getElementById(sectionId);
+      if (!section) continue;
+      const h2 = section.querySelector('h2');
+      if (!h2 || h2.querySelector('.harness-badge')) continue;
+      const writes = tables.reduce((s, t) => s + ((a[t] && a[t].recent) || 0), 0);
+      const maxDaysAgo = tables.reduce((m, t) => {
+        const last = a[t] && a[t].last;
+        if (!last) return m;
+        const days = Math.floor((Date.now() - new Date(last).getTime()) / 86400000);
+        return Math.max(m, days);
+      }, 0);
+      const stale = maxDaysAgo >= 7;
+      const color = stale ? '#ef4444' : (writes > 0 ? '#34d399' : '#64748b');
+      const dot = stale ? '🔴' : (writes > 0 ? '🟢' : '⚪');
+      const badge = document.createElement('span');
+      badge.className = 'harness-badge';
+      badge.title = stale ? `stale ≥7 días sin writes` : `${writes} writes últimos 7d`;
+      badge.style.cssText = `margin-left:10px;font-size:11px;color:${color};font-weight:400`;
+      badge.textContent = `${dot} ${writes}/7d`;
+      h2.appendChild(badge);
+    }
+  } catch (e) { /* silent */ }
 }
 
 function _renderBrainSubNav() {

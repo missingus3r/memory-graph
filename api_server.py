@@ -110,7 +110,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.5.1"
+VERSION = "2.6.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -2345,6 +2345,50 @@ def capability_create():
         return jsonify({"error": str(e)}), 400
     created = db.execute(f"SELECT {_CAP_COLUMNS} FROM capabilities WHERE name = ?", [name]).fetchone()
     return jsonify({"status": "created", "capability": _cap_row_to_dict(created)})
+
+
+@app.route("/harness/activity", methods=["GET"])
+def harness_activity():
+    """Write activity per harness table. Used by Brain dashboard to flag stale sections.
+    Query: ?hours=24 (default), or ?days=7"""
+    db = get_db()
+    hours = safe_int(request.args.get("hours"), default=24, max_val=8760)
+    if request.args.get("days"):
+        hours = safe_int(request.args.get("days"), default=1, max_val=365) * 24
+    since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
+
+    tracked = {
+        "goals": "created_at",
+        "plan_tree": "created_at",
+        "capabilities": "updated_at",
+        "experiments": "created_at",
+        "proposals": "created_at",
+        "sandbox_executions": "created_at",
+        "verifications": "created_at",
+        "wm_entities": "updated_at",
+        "wm_events": "observed_at",
+        "wm_predictions": "created_at",
+        "wm_relations": "created_at",
+        "world_model": "updated_at",
+        "entities": "updated_at",
+        "memories": "updated_at",
+        "insights": "created_at",
+        "preferences": "updated_at",
+        "reflections": "created_at",
+        "skills": "last_used",
+        "metrics": "timestamp",
+    }
+    activity = {}
+    for table, ts_col in tracked.items():
+        try:
+            recent = db.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE {ts_col} >= ?", [since]).fetchone()[0]
+            total = db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            last = db.execute(f"SELECT MAX({ts_col}) FROM {table}").fetchone()[0]
+            activity[table] = {"recent": recent, "total": total, "last": last}
+        except Exception as e:
+            activity[table] = {"error": str(e)}
+    return jsonify({"since": since, "hours": hours, "activity": activity})
 
 
 @app.route("/capability/list", methods=["GET"])

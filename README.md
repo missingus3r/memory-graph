@@ -6,7 +6,7 @@ Flask + SQLite backend, single-file D3.js frontend. No external DB, no vector st
 
 > ⚠️ **This repo is not a template to clone.** It is a **snapshot of my personal instance**, committed here for reference and as the source for the screenshots in the showcase. The code in this repo is **generated autonomously by Claude Code** when it runs the [`SETUP.md`](https://github.com/missingus3r/friday-showcase/blob/main/SETUP.md) from [friday-showcase](https://github.com/missingus3r/friday-showcase) — every user ends up with their own slightly different version. If you want to stand up your own Friday, follow the SETUP from friday-showcase; don't clone this one.
 
-**Version:** 2.5.1 — see `VERSION` constant in [api_server.py](api_server.py).
+**Version:** 2.6.0 — see `VERSION` constant in [api_server.py](api_server.py).
 
 ## Tabs
 
