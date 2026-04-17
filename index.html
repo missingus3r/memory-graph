@@ -439,11 +439,13 @@ function updateGraph() {
 
   const showHeartbeats = activeFilters.has('heartbeat');
   const showEmailChecks = activeFilters.has('email-cron');
+  const isHeartbeat = n => n.subtype === 'heartbeat' || (n.group === 'system' && /^heartbeat\b/i.test(n.content || ''));
+  const isEmailCheck = n => n.subtype === 'email-cron' || (n.group === 'system' && /^email check\b/i.test(n.content || ''));
   let filteredNodes = allNodes.filter(n => {
     if (n.group === 'channel' || n.group === 'topic') return true;
     if (!activeFilters.has(n.group)) return false;
-    if (!showHeartbeats && n.subtype === 'heartbeat') return false;
-    if (!showEmailChecks && n.subtype === 'email-cron') return false;
+    if (!showHeartbeats && isHeartbeat(n)) return false;
+    if (!showEmailChecks && isEmailCheck(n)) return false;
     if (searchTerm && !n.label.toLowerCase().includes(searchTerm) && !(n.content||'').toLowerCase().includes(searchTerm)) return false;
     return true;
   });
