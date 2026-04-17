@@ -159,6 +159,7 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <button class="filter-btn active" data-filter="preference" style="--c:#22d3ee">Preferences</button>
     <button class="filter-btn active" data-filter="insight" style="--c:#a855f7">Insights</button>
     <button class="filter-btn active" data-filter="proposal" style="--c:#f97316">Proposals</button>
+    <button class="filter-btn" data-filter="heartbeat" style="--c:#94a3b8" title="Mostrar heartbeats (ocultos por defecto)">💓 Heartbeats</button>
   </div>
 </div>
 
@@ -435,9 +436,11 @@ function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : s; 
 function updateGraph() {
   const searchTerm = document.getElementById('search').value.toLowerCase();
 
+  const showHeartbeats = activeFilters.has('heartbeat');
   let filteredNodes = allNodes.filter(n => {
     if (n.group === 'channel' || n.group === 'topic') return true;
     if (!activeFilters.has(n.group)) return false;
+    if (!showHeartbeats && n.subtype === 'heartbeat') return false;
     if (searchTerm && !n.label.toLowerCase().includes(searchTerm) && !(n.content||'').toLowerCase().includes(searchTerm)) return false;
     return true;
   });
