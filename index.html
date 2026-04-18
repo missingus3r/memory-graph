@@ -115,6 +115,38 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
 .arch-modal-close:hover{color:#e2e8f0;background:rgba(255,255,255,0.05)}
 .arch-modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;z-index:299;background:rgba(0,0,0,0.5);display:none}
 
+/* Usage dashboard button + modal */
+.usage-btn{padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid rgba(52,211,153,0.35);background:rgba(52,211,153,0.08);color:#34d399;transition:all 0.2s;border-radius:8px;white-space:nowrap}
+.usage-btn:hover{background:rgba(52,211,153,0.15);border-color:#34d399}
+.usage-modal-overlay{position:fixed;inset:0;z-index:399;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;padding:20px}
+.usage-modal-overlay.open{display:flex}
+.usage-modal{width:100%;max-width:540px;background:rgba(15,15,25,0.97);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.1);border-radius:14px;padding:24px 26px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.7)}
+.usage-modal h2{font-size:16px;font-weight:700;color:#e2e8f0;margin-bottom:4px;display:flex;align-items:center;gap:10px}
+.usage-modal .usage-sub{font-size:12px;color:#64748b;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.usage-modal .usage-sub b{color:#94a3b8}
+.usage-row{margin-bottom:14px;padding:12px 14px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:10px}
+.usage-row-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;flex-wrap:wrap;gap:8px}
+.usage-row-title{font-size:12px;font-weight:700;color:#e2e8f0;text-transform:uppercase;letter-spacing:0.6px}
+.usage-row-pct{font-size:18px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-0.02em}
+.usage-bar{height:8px;background:rgba(255,255,255,0.06);border-radius:4px;overflow:hidden;margin-bottom:8px}
+.usage-bar-fill{height:100%;border-radius:4px;transition:width 0.4s ease}
+.usage-bar-fill.low{background:linear-gradient(90deg,#34d399,#10b981)}
+.usage-bar-fill.mid{background:linear-gradient(90deg,#fbbf24,#f59e0b)}
+.usage-bar-fill.high{background:linear-gradient(90deg,#ef4444,#dc2626)}
+.usage-meta{font-size:11px;color:#64748b;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
+.usage-meta b{color:#94a3b8;font-weight:600}
+.usage-insight{margin-top:8px;padding:10px 12px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:8px;font-size:12px;color:#fbbf24;line-height:1.5}
+.usage-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06)}
+.usage-btn-refresh{padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid rgba(52,211,153,0.4);background:rgba(52,211,153,0.1);color:#34d399;border-radius:8px;transition:all 0.2s}
+.usage-btn-refresh:hover:not(:disabled){background:rgba(52,211,153,0.18)}
+.usage-btn-refresh:disabled{opacity:0.5;cursor:not-allowed}
+.usage-btn-close{padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,0.1);background:transparent;color:#94a3b8;border-radius:8px;transition:all 0.2s}
+.usage-btn-close:hover{color:#e2e8f0;border-color:rgba(255,255,255,0.2)}
+.usage-empty{text-align:center;padding:30px 20px;color:#64748b;font-size:13px}
+.usage-loading{text-align:center;padding:24px 20px;color:#64748b;font-size:12px}
+.usage-loading .spinner{width:24px;height:24px;border:2px solid rgba(255,255,255,0.1);border-top-color:#34d399;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 10px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
 /* Mobile */
 @media(max-width:640px){
   .topbar{padding:8px 10px;gap:8px}
@@ -142,6 +174,7 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <button class="tab-btn" data-tab="brain">Brain</button>
     <button class="tab-btn" data-tab="crons">Crons</button>
   </div>
+  <button class="usage-btn" id="usageBtn" title="Consumo de Claude Code">$ Usage</button>
   <div class="stats">
     <span>Nodos: <b id="nodeCount">0</b></span>
     <span>Links: <b id="linkCount">0</b></span>
@@ -182,6 +215,21 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
   <div class="legend-item"><div class="legend-dot" style="background:#22d3ee"></div>Preference</div>
   <div class="legend-item"><div class="legend-dot" style="background:#a855f7"></div>Insight</div>
   <div class="legend-item"><div class="legend-dot" style="background:#f97316"></div>Proposal</div>
+</div>
+
+<!-- Claude Code usage modal -->
+<div class="usage-modal-overlay" id="usageModal">
+  <div class="usage-modal">
+    <h2>Claude Code — Usage</h2>
+    <div class="usage-sub">
+      <span id="usageSub">Sin datos — tocá <b>Actualizar</b> para consultar</span>
+    </div>
+    <div id="usageBody"></div>
+    <div class="usage-actions">
+      <button class="usage-btn-refresh" id="usageRefresh">Actualizar</button>
+      <button class="usage-btn-close" id="usageClose">Cerrar</button>
+    </div>
+  </div>
 </div>
 
 <svg id="graph" class="tab-view active"></svg>
@@ -2113,6 +2161,149 @@ async function renderMetrics() {
 // Restore tab from hash (after all data is defined)
 const hashTab = location.hash.replace('#','');
 if (['logs','graph','arch','rag','brain','crons'].includes(hashTab)) switchTab(hashTab);
+</script>
+<script>
+// ─── Claude Code Usage dashboard ────────────────────────────────
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const overlay = $('usageModal');
+  const body = $('usageBody');
+  const subEl = $('usageSub');
+  const btnOpen = $('usageBtn');
+  const btnRefresh = $('usageRefresh');
+  const btnClose = $('usageClose');
+
+  if (!btnOpen || !overlay) return;
+
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleString('es-UY', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function pctClass(p) { return p >= 75 ? 'high' : (p >= 50 ? 'mid' : 'low'); }
+  function pctColor(p) { return p >= 75 ? '#ef4444' : (p >= 50 ? '#fbbf24' : '#34d399'); }
+
+  function renderRow(title, pct, resets, extraMeta) {
+    const cls = pctClass(pct);
+    const col = pctColor(pct);
+    const w = Math.max(2, Math.min(100, pct));
+    const metaParts = [];
+    if (resets) metaParts.push(`<span><b>Resets:</b> ${escapeHtml(resets)}</span>`);
+    if (extraMeta) metaParts.push(extraMeta);
+    return `
+      <div class="usage-row">
+        <div class="usage-row-head">
+          <span class="usage-row-title">${escapeHtml(title)}</span>
+          <span class="usage-row-pct" style="color:${col}">${pct}%</span>
+        </div>
+        <div class="usage-bar"><div class="usage-bar-fill ${cls}" style="width:${w}%"></div></div>
+        ${metaParts.length ? `<div class="usage-meta">${metaParts.join('')}</div>` : ''}
+      </div>
+    `;
+  }
+
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function renderUsage(data) {
+    if (!data) {
+      body.innerHTML = '<div class="usage-empty">Sin datos. Tocá <b>Actualizar</b> para consultar /usage ahora.</div>';
+      return;
+    }
+    const rows = [];
+    if (data.session) rows.push(renderRow('Sesión actual', data.session.pct, data.session.resets));
+    if (data.weekAll) rows.push(renderRow('Semanal — todos los modelos', data.weekAll.pct, data.weekAll.resets));
+    if (data.weekSonnet) rows.push(renderRow('Semanal — solo Sonnet', data.weekSonnet.pct, null));
+    if (data.extra) {
+      const spentMeta = `<span><b>Gastado:</b> $${escapeHtml(data.extra.spent)} / $${escapeHtml(data.extra.total)}</span>`;
+      rows.push(renderRow('Extra usage', data.extra.pct, data.extra.resets, spentMeta));
+    }
+    if (!rows.length) {
+      body.innerHTML = '<div class="usage-empty">No se pudo parsear el /usage. Probá de nuevo.</div>';
+      return;
+    }
+    let html = rows.join('');
+    if (data.insight) html += `<div class="usage-insight">⚡ ${escapeHtml(data.insight)}</div>`;
+    body.innerHTML = html;
+  }
+
+  async function loadCached() {
+    try {
+      const res = await fetch('/usage/claude');
+      const j = await res.json();
+      if (j.fetching) {
+        subEl.innerHTML = '<span style="color:#fbbf24">⏳ Actualizando...</span>';
+        setBusy(true);
+        pollUntilDone();
+      } else if (j.fetched_at) {
+        const r = j.result || {};
+        if (r.error) {
+          subEl.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b> · <span style="color:#ef4444">error: ${escapeHtml(r.error)}</span>`;
+          body.innerHTML = '<div class="usage-empty">Error al consultar /usage. Tocá <b>Actualizar</b> para reintentar.</div>';
+        } else {
+          subEl.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b>`;
+          renderUsage(r.data);
+        }
+      }
+    } catch (e) {
+      subEl.textContent = 'Error de red: ' + e.message;
+    }
+  }
+
+  let pollingTimer = null;
+  function pollUntilDone() {
+    clearTimeout(pollingTimer);
+    pollingTimer = setTimeout(async () => {
+      try {
+        const res = await fetch('/usage/claude');
+        const j = await res.json();
+        if (j.fetching) {
+          pollUntilDone();
+        } else {
+          setBusy(false);
+          if (j.fetched_at) {
+            const r = j.result || {};
+            if (r.error) {
+              subEl.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b> · <span style="color:#ef4444">error: ${escapeHtml(r.error)}</span>`;
+              body.innerHTML = '<div class="usage-empty">Error al consultar /usage. Tocá <b>Actualizar</b> para reintentar.</div>';
+            } else {
+              subEl.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b>`;
+              renderUsage(r.data);
+            }
+          }
+        }
+      } catch (e) {
+        setBusy(false);
+        subEl.textContent = 'Error: ' + e.message;
+      }
+    }, 2000);
+  }
+
+  function setBusy(busy) {
+    btnRefresh.disabled = busy;
+    btnRefresh.textContent = busy ? 'Actualizando…' : 'Actualizar';
+  }
+
+  async function refresh() {
+    setBusy(true);
+    body.innerHTML = '<div class="usage-loading"><div class="spinner"></div>Consultando Claude Code /usage — tarda ~30 segundos...</div>';
+    subEl.innerHTML = '<span style="color:#fbbf24">⏳ Spawn + /usage + parse...</span>';
+    try {
+      await fetch('/usage/claude/refresh', { method: 'POST' });
+      pollUntilDone();
+    } catch (e) {
+      setBusy(false);
+      subEl.textContent = 'Error: ' + e.message;
+    }
+  }
+
+  btnOpen.onclick = () => { overlay.classList.add('open'); loadCached(); };
+  btnClose.onclick = () => overlay.classList.remove('open');
+  btnRefresh.onclick = refresh;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
+})();
 </script>
 </body>
 </html>

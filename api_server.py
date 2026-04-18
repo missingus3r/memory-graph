@@ -102,6 +102,7 @@ import datetime
 import struct
 import math
 import threading
+import time
 from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import URLError
@@ -110,7 +111,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -3457,6 +3458,190 @@ def cron_prompts_read():
         s["body"] = s["body"].strip()
     return jsonify({"count": len(sections), "path": str(_CRON_PROMPTS_PATH),
                     "sections": sections})
+
+
+# ───────────────────────────────────────────────────────────────
+# Claude Code usage dashboard
+# Spawns `claude` in a pty, sends /usage, parses the TUI output.
+# Blocking ~25-35s per call. UI triggers on demand via refresh button.
+# ───────────────────────────────────────────────────────────────
+_USAGE_CACHE = {"data": None, "fetched_at": None, "fetching": False}
+_USAGE_LOCK = threading.Lock()
+
+
+def _find_claude_bin():
+    import shutil
+    candidates = [
+        str(Path.home() / ".local/bin/claude"),
+        str(Path.home() / ".claude/local/claude"),
+        "/usr/local/bin/claude",
+        "/usr/bin/claude",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return shutil.which("claude")
+
+
+_ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+
+def _strip_ansi(s):
+    return _ANSI_RE.sub("", s)
+
+
+def _parse_usage(raw):
+    clean = re.sub(r"\s+", " ", _strip_ansi(raw))
+    data = {}
+
+    m = re.search(r"Current\s*session\s*[█▌░\s]*(\d+)\s*%\s*used\s*Rese?t?s?\s*s?\s*(.+?)(?=Current|Extra|Esc|What|$)", clean, re.I)
+    if m:
+        data["session"] = {"pct": int(m.group(1)), "resets": m.group(2).strip()}
+
+    m = re.search(r"Current\s*week\s*\(all\s*models?\)\s*[█▌░\s]*(\d+)\s*%\s*used\s*Rese?t?s?\s*(.+?)(?=Current|Extra|Esc|What|$)", clean, re.I)
+    if m:
+        data["weekAll"] = {"pct": int(m.group(1)), "resets": m.group(2).strip()}
+
+    m = re.search(r"Current\s*week\s*\(Sonnet\s*only\)\s*[█▌░\s]*(\d+)\s*%\s*used", clean, re.I)
+    if m:
+        data["weekSonnet"] = {"pct": int(m.group(1))}
+
+    m = re.search(r"Extra\s*usage\s*[█▌░▏\s]*(\d+)\s*%\s*used\s*\$?\s*([\d.]+)\s*\/\s*\$?\s*([\d.]+)\s*spent\s*·?\s*Rese?t?s?\s*(.+?)(?=Esc|Last|$)", clean, re.I)
+    if m:
+        data["extra"] = {
+            "pct": int(m.group(1)),
+            "spent": m.group(2),
+            "total": m.group(3),
+            "resets": m.group(4).strip(),
+        }
+
+    m = re.search(r"(\d+)\s*%\s*of\s*your\s*usage\s*was\s*while\s*(\d+\+?\s*sessions?\s*ran\s*in\s*parallel)", clean, re.I)
+    if m:
+        data["insight"] = f"{m.group(1)}% of your usage was while {m.group(2)}"
+
+    return data if (data.get("session") or data.get("weekAll") or data.get("extra")) else None
+
+
+def _fetch_claude_usage():
+    """Spawn `claude` via pexpect, send /usage, harvest the TUI output."""
+    try:
+        import pexpect
+    except ImportError:
+        return {"error": "pexpect not installed"}
+
+    binpath = _find_claude_bin()
+    if not binpath:
+        return {"error": "claude binary not found"}
+
+    buf = ""
+    child = None
+    # Pick a dir claude already trusts to skip the "do you trust this folder" prompt.
+    # We read ~/.claude.json to find one.
+    cwd = str(Path.home())
+    try:
+        with open(Path.home() / ".claude.json") as f:
+            _cfg = json.load(f)
+        trusted_dirs = [p for p, v in _cfg.get("projects", {}).items()
+                        if isinstance(v, dict) and v.get("hasTrustDialogAccepted") and os.path.isdir(p)]
+        if trusted_dirs:
+            cwd = trusted_dirs[0]
+    except Exception:
+        pass
+    try:
+        print(f"[usage] spawning {binpath} from cwd={cwd}", flush=True)
+        child = pexpect.spawn(
+            binpath, dimensions=(50, 120), encoding="utf-8", timeout=None,
+            cwd=cwd,
+            env={**os.environ, "TERM": "xterm-256color", "PWD": cwd, "HOME": str(Path.home())},
+        )
+
+        def read_avail(timeout=1.0):
+            try:
+                return child.read_nonblocking(size=100_000, timeout=timeout)
+            except (pexpect.exceptions.TIMEOUT, pexpect.exceptions.EOF):
+                return ""
+            except Exception:
+                return ""
+
+        # Wait for splash then auto-confirm the trust prompt if it appears.
+        trust_confirmed = False
+        deadline = time.time() + 12.0
+        while time.time() < deadline:
+            chunk = read_avail(0.5)
+            if chunk:
+                buf += chunk
+                if not trust_confirmed and ("trust this folder" in buf.lower() or "Enter to confirm" in buf):
+                    child.send("\r")  # press Enter to accept "1. Yes"
+                    trust_confirmed = True
+                    time.sleep(2.5)
+
+        # Type /usage then Enter. claude TUI treats \r as submit;
+        # sendline() sends \n which triggers autocomplete instead of submit.
+        child.send("/usage")
+        time.sleep(0.5)
+        child.send("\r")
+
+        deadline = time.time() + 18.0
+        while time.time() < deadline:
+            chunk = read_avail(0.6)
+            if chunk:
+                buf += chunk
+
+        try:
+            child.send("\x1b")
+            time.sleep(0.5)
+            child.sendline("/exit")
+            time.sleep(1.5)
+        except Exception:
+            pass
+    finally:
+        if child:
+            try:
+                child.terminate(force=True)
+            except Exception:
+                pass
+
+    data = _parse_usage(buf)
+    if not data:
+        return {"error": "no usage data parsed", "raw_preview": _strip_ansi(buf)[-400:]}
+    return {"ok": True, "data": data}
+
+
+def _fetch_usage_background():
+    with _USAGE_LOCK:
+        if _USAGE_CACHE["fetching"]:
+            return
+        _USAGE_CACHE["fetching"] = True
+    try:
+        result = _fetch_claude_usage()
+        _USAGE_CACHE["data"] = result
+        _USAGE_CACHE["fetched_at"] = now_iso()
+    finally:
+        _USAGE_CACHE["fetching"] = False
+
+
+@app.route("/usage/claude", methods=["GET"])
+def usage_claude_get():
+    return jsonify({
+        "fetched_at": _USAGE_CACHE["fetched_at"],
+        "fetching": _USAGE_CACHE["fetching"],
+        "result": _USAGE_CACHE["data"],
+    })
+
+
+@app.route("/usage/claude/refresh", methods=["POST"])
+def usage_claude_refresh():
+    sync = request.args.get("sync") in ("1", "true")
+    if sync:
+        _fetch_usage_background()
+        return jsonify({
+            "fetched_at": _USAGE_CACHE["fetched_at"],
+            "fetching": _USAGE_CACHE["fetching"],
+            "result": _USAGE_CACHE["data"],
+        })
+    t = threading.Thread(target=_fetch_usage_background, daemon=True)
+    t.start()
+    return jsonify({"started": True, "fetching": True})
 
 
 if __name__ == "__main__":
