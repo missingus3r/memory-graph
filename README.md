@@ -16,7 +16,7 @@ Six tabs served at `/graph`:
 - **Logs** — chronological view of conversation logs with collapsible date groups and live search.
 - **Arch** — system architecture diagram with draggable nodes. Positions persist server-side via `/kv/<key>`.
 - **RAG** — semantic search dashboard: hybrid search (FTS5 + cosine RRF), embedding stats, reindex trigger.
-- **Brain** — consolidated audit surface for Friday's self-improving harness (Goals, Plans, three-layer Memory, causal World Model, Capabilities + Autonomy, Verifier + Sandbox, Experiments, Metrics). Sticky sub-nav, responsive grid. See the [harness deep-dive](https://missingus3r.github.io/friday-showcase/harness.html).
+- **Brain** — consolidated audit surface for Friday's self-improving harness (Goals, Plans, three-layer Memory, causal World Model, Capabilities + Autonomy, Verifier + Sandbox, Experiments, Metrics). Sticky sub-nav, responsive grid.
 - **Crons** — two-column diff: runtime-active jobs with live countdowns to next fire, vs the prompts persisted in `~/.claude/cron-prompts.md`, with `sincronizado` / `⚠ no corriendo` badges.
 
 ## Screenshots
@@ -88,7 +88,7 @@ The full API has grown past 100 endpoints. Core ones:
 | `GET /proposal/list` / `/pending` / `POST /proposal/<id>/approve` | Self-improvement proposals (approve/reject accepts PUT/POST/PATCH since v2.8.0) |
 | `GET /backup/info` / `/export` / `POST /backup/import` | Disaster recovery: whole-DB snapshot export (`VACUUM INTO` .db or `.sql` dump) + validated import with auto-backup of previous |
 
-Full table ownership notes and the soft-observation → structured-knowledge promotion flow live in Friday's `CLAUDE.md` and in the [harness deep-dive](https://missingus3r.github.io/friday-showcase/harness.html).
+Full table ownership notes and the soft-observation → structured-knowledge promotion flow live in Friday's `CLAUDE.md`.
 
 ## Architecture
 
@@ -119,8 +119,7 @@ Or use the **💾 Backup** button in the dashboard topbar — info / export / im
 
 ## Related
 
-- [friday-showcase](https://github.com/missingus3r/friday-showcase) — the 24/7 Claude Code assistant that writes to this memory server.
-- [harness.html](https://missingus3r.github.io/friday-showcase/harness.html) — technical deep-dive on the v2 self-evolving harness.
+- [friday-showcase](https://github.com/missingus3r/friday-showcase) — the 24/7 Claude Code assistant that writes to this memory server (includes the v2 self-evolving harness deep-dive as an in-page modal).
 
 ---
 
