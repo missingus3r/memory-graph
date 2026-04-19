@@ -111,7 +111,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -1578,7 +1578,25 @@ def proposal_pending():
     return jsonify({"count": len(results), "results": results})
 
 
-@app.route("/proposal/<int:proposal_id>/approve", methods=["PUT"])
+@app.route("/proposal/list")
+def proposal_list():
+    db = get_db()
+    status = request.args.get("status")
+    if status:
+        rows = db.execute(
+            "SELECT id, file_path, change_type, description, diff_preview, status, created_at, resolved_at FROM proposals WHERE status = ? ORDER BY created_at DESC",
+            [status]
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT id, file_path, change_type, description, diff_preview, status, created_at, resolved_at FROM proposals ORDER BY created_at DESC"
+        ).fetchall()
+    results = [{"id": r[0], "file_path": r[1], "change_type": r[2], "description": r[3],
+                "diff_preview": r[4], "status": r[5], "created_at": r[6], "resolved_at": r[7]} for r in rows]
+    return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/proposal/<int:proposal_id>/approve", methods=["PUT", "POST", "PATCH"])
 def proposal_approve(proposal_id):
     db = get_db()
     ts = now_iso()
@@ -1586,7 +1604,7 @@ def proposal_approve(proposal_id):
     return jsonify({"status": "approved", "id": proposal_id})
 
 
-@app.route("/proposal/<int:proposal_id>/reject", methods=["PUT"])
+@app.route("/proposal/<int:proposal_id>/reject", methods=["PUT", "POST", "PATCH"])
 def proposal_reject(proposal_id):
     db = get_db()
     ts = now_iso()
