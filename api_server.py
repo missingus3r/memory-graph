@@ -111,7 +111,7 @@ from flask import Flask, request, jsonify, g, send_file
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.8.0"
+VERSION = "2.9.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -1256,6 +1256,133 @@ def health():
 @app.route("/version")
 def version():
     return jsonify({"version": VERSION})
+
+
+# ── Backup / Restore ──────────────────────────────────────────────────────
+# Whole-DB snapshot for disaster recovery. If the mini-pc dies, export +
+# save the .db file somewhere safe; later POST it back to /backup/import on
+# a fresh install and restart the server to resume where things stopped.
+
+@app.route("/backup/info")
+def backup_info():
+    import shutil
+    db_path = Path(DB_PATH)
+    size = db_path.stat().st_size if db_path.exists() else 0
+    mtime = datetime.datetime.fromtimestamp(db_path.stat().st_mtime).isoformat() if db_path.exists() else None
+    # List pre-import backups
+    parent = db_path.parent
+    backups = []
+    for f in sorted(parent.glob(f"{db_path.name}.pre-import-*"), reverse=True):
+        backups.append({
+            "name": f.name,
+            "size_bytes": f.stat().st_size,
+            "created": datetime.datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+        })
+    # Disk space
+    disk = shutil.disk_usage(str(parent))
+    return jsonify({
+        "db_path": str(db_path),
+        "db_size_bytes": size,
+        "db_size_mb": round(size / (1024*1024), 2),
+        "db_last_modified": mtime,
+        "version": VERSION,
+        "disk_free_mb": round(disk.free / (1024*1024), 2),
+        "pre_import_backups": backups,
+    })
+
+
+@app.route("/backup/export")
+def backup_export():
+    """Generate a consistent snapshot of the DB via VACUUM INTO and stream it
+    as a download. Safe to call while the server is serving requests.
+    Optional ?format=dump returns a SQL dump (.sql) instead of the binary .db."""
+    import tempfile
+    fmt = request.args.get("format", "db")
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    if fmt == "dump":
+        # Plain-SQL dump (portable, diffable, slower)
+        src = sqlite3.connect(DB_PATH)
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False, encoding="utf-8")
+        for line in src.iterdump():
+            tmp.write(f"{line}\n")
+        tmp.close()
+        src.close()
+        return send_file(
+            tmp.name,
+            as_attachment=True,
+            download_name=f"friday-memory-{ts}.sql",
+            mimetype="application/sql",
+        )
+    # Default: .db binary snapshot via VACUUM INTO (consistent even with writers)
+    snap_path = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
+    os.remove(snap_path)  # VACUUM INTO requires destination to not exist
+    src = sqlite3.connect(DB_PATH)
+    try:
+        src.execute("VACUUM INTO ?", [snap_path])
+    finally:
+        src.close()
+    return send_file(
+        snap_path,
+        as_attachment=True,
+        download_name=f"friday-memory-{ts}.db",
+        mimetype="application/x-sqlite3",
+    )
+
+
+@app.route("/backup/import", methods=["POST"])
+def backup_import():
+    """Replace the live DB with an uploaded snapshot. The previous DB is kept
+    as <db>.pre-import-<ts>. After import, RESTART the server to reload
+    connections — the API will keep answering on the old DB until restart."""
+    import shutil
+    import tempfile
+    if "file" not in request.files:
+        return jsonify({"error": "upload the snapshot with form field 'file'"}), 400
+    up = request.files["file"]
+    if not up.filename:
+        return jsonify({"error": "empty filename"}), 400
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    up.save(tmp_path)
+    # Validate it's a real SQLite with at least one expected table
+    try:
+        conn = sqlite3.connect(tmp_path)
+        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        conn.close()
+        tables = [r[0] for r in rows]
+        if not tables:
+            os.remove(tmp_path)
+            return jsonify({"error": "uploaded file has no tables"}), 400
+        expected = {"conversations", "memories", "entities"}
+        missing = expected - set(tables)
+        if missing:
+            os.remove(tmp_path)
+            return jsonify({"error": f"uploaded file is missing core tables: {sorted(missing)}"}), 400
+    except sqlite3.DatabaseError as e:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        return jsonify({"error": f"not a valid SQLite database: {e}"}), 400
+    # Backup current DB
+    db_path = Path(DB_PATH)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = db_path.parent / f"{db_path.name}.pre-import-{ts}"
+    shutil.copy2(DB_PATH, str(backup_path))
+    # Swap in uploaded file
+    shutil.copy2(tmp_path, DB_PATH)
+    os.remove(tmp_path)
+    new_size = Path(DB_PATH).stat().st_size
+    return jsonify({
+        "status": "imported",
+        "new_db_size_bytes": new_size,
+        "new_db_size_mb": round(new_size / (1024*1024), 2),
+        "tables_found": sorted(tables),
+        "previous_db_backup": str(backup_path),
+        "restart_required": True,
+        "restart_note": "Restart the server (kill + nohup) to reload sqlite_utils connections with the imported DB. Until restart the API keeps serving the old DB from memory.",
+    })
 
 
 @app.route("/graph")

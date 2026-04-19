@@ -175,6 +175,7 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <button class="tab-btn" data-tab="crons">Crons</button>
   </div>
   <button class="usage-btn" id="usageBtn" title="Consumo de Claude Code">$ Usage</button>
+  <button class="usage-btn" id="backupBtn" title="Backup / Restore DB" style="border-color:rgba(251,191,36,0.35);background:rgba(251,191,36,0.08);color:#fbbf24">💾 Backup</button>
   <div class="stats">
     <span>Nodos: <b id="nodeCount">0</b></span>
     <span>Links: <b id="linkCount">0</b></span>
@@ -228,6 +229,43 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <div class="usage-actions">
       <button class="usage-btn-refresh" id="usageRefresh">Actualizar</button>
       <button class="usage-btn-close" id="usageClose">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Backup / Restore modal -->
+<div class="usage-modal-overlay" id="backupModal">
+  <div class="usage-modal">
+    <h2>💾 Backup / Restore DB</h2>
+    <div class="usage-sub">
+      <span id="backupSub">Snapshot completo del cerebro de Friday — exportá antes de cualquier cambio riesgoso</span>
+    </div>
+    <div id="backupBody">
+      <div class="usage-row">
+        <div class="usage-row-head"><div class="usage-row-title">Estado actual</div></div>
+        <div class="usage-meta" id="backupInfo"><span>cargando...</span></div>
+      </div>
+      <div class="usage-row">
+        <div class="usage-row-head"><div class="usage-row-title">Exportar</div></div>
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:10px">Descarga un snapshot consistente (VACUUM INTO). Guardá el .db en un drive externo, Drive, Dropbox, etc.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="usage-btn-refresh" onclick="window.location.href='/backup/export'">Descargar .db</button>
+          <button class="usage-btn-close" onclick="window.location.href='/backup/export?format=dump'">Descargar .sql (dump)</button>
+        </div>
+      </div>
+      <div class="usage-row" style="border-color:rgba(239,68,68,0.25);background:rgba(239,68,68,0.04)">
+        <div class="usage-row-head"><div class="usage-row-title" style="color:#ef4444">Importar (reemplaza la DB actual)</div></div>
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:10px">Subí un .db generado previamente. La DB actual queda guardada como <code style="color:#fbbf24">memory.db.pre-import-&lt;ts&gt;</code>. Requiere reiniciar el server manualmente después.</div>
+        <form id="backupImportForm" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input type="file" id="backupFile" accept=".db,application/x-sqlite3" style="flex:1;min-width:180px;color:#94a3b8;font-size:12px">
+          <button type="submit" class="usage-btn-refresh" style="border-color:rgba(239,68,68,0.4);background:rgba(239,68,68,0.1);color:#ef4444">Importar</button>
+        </form>
+        <div id="backupImportResult" style="font-size:12px;margin-top:10px;color:#94a3b8"></div>
+      </div>
+    </div>
+    <div class="usage-actions">
+      <button class="usage-btn-refresh" id="backupRefresh">Refrescar info</button>
+      <button class="usage-btn-close" id="backupClose">Cerrar</button>
     </div>
   </div>
 </div>
@@ -2302,6 +2340,91 @@ if (['logs','graph','arch','rag','brain','crons'].includes(hashTab)) switchTab(h
   btnOpen.onclick = () => { overlay.classList.add('open'); loadCached(); };
   btnClose.onclick = () => overlay.classList.remove('open');
   btnRefresh.onclick = refresh;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
+})();
+</script>
+<script>
+// ─── Backup / Restore modal ─────────────────────────────────────
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const overlay = $('backupModal');
+  const btnOpen = $('backupBtn');
+  const btnRefresh = $('backupRefresh');
+  const btnClose = $('backupClose');
+  const infoEl = $('backupInfo');
+  const form = $('backupImportForm');
+  const fileInput = $('backupFile');
+  const resultEl = $('backupImportResult');
+
+  if (!btnOpen || !overlay) return;
+
+  function escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleString('es-UY', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' });
+    } catch (e) { return iso; }
+  }
+
+  async function loadInfo() {
+    infoEl.innerHTML = '<span>cargando...</span>';
+    try {
+      const res = await fetch('/backup/info');
+      const j = await res.json();
+      const parts = [
+        `<span><b>Path:</b> <code style="color:#94a3b8">${escHtml(j.db_path)}</code></span>`,
+        `<span><b>Tamaño:</b> ${j.db_size_mb} MB</span>`,
+        `<span><b>Última modificación:</b> ${fmtDate(j.db_last_modified)}</span>`,
+        `<span><b>Versión API:</b> ${escHtml(j.version)}</span>`,
+        `<span><b>Disco libre:</b> ${j.disk_free_mb} MB</span>`,
+      ];
+      if (j.pre_import_backups && j.pre_import_backups.length) {
+        parts.push(`<span style="width:100%"><b>Backups pre-import previos:</b> ${j.pre_import_backups.length}</span>`);
+        j.pre_import_backups.slice(0, 3).forEach(b => {
+          parts.push(`<span style="width:100%;color:#64748b;font-size:10px">• ${escHtml(b.name)} — ${(b.size_bytes/1024/1024).toFixed(2)} MB · ${fmtDate(b.created)}</span>`);
+        });
+      }
+      infoEl.innerHTML = parts.join('');
+    } catch (e) {
+      infoEl.innerHTML = `<span style="color:#ef4444">Error: ${escHtml(e.message)}</span>`;
+    }
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!fileInput.files.length) {
+      resultEl.innerHTML = '<span style="color:#ef4444">Elegí un archivo .db primero.</span>';
+      return;
+    }
+    if (!confirm('Esto reemplaza la DB actual. La actual se guarda como pre-import-<ts>. Después tenés que reiniciar el server manualmente. ¿Seguir?')) return;
+    resultEl.innerHTML = '<span>Subiendo...</span>';
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    try {
+      const res = await fetch('/backup/import', { method: 'POST', body: fd });
+      const j = await res.json();
+      if (!res.ok) {
+        resultEl.innerHTML = `<span style="color:#ef4444">Error: ${escHtml(j.error || 'import fallido')}</span>`;
+        return;
+      }
+      resultEl.innerHTML = `
+        <div style="color:#34d399"><b>✓ Importado.</b> ${j.new_db_size_mb} MB · tablas: ${j.tables_found.length}</div>
+        <div style="color:#94a3b8;margin-top:4px">Backup previo: <code>${escHtml(j.previous_db_backup)}</code></div>
+        <div style="color:#fbbf24;margin-top:6px">⚠️ Reiniciá el server para cargar la DB importada (kill + nohup).</div>
+      `;
+      loadInfo();
+    } catch (e) {
+      resultEl.innerHTML = `<span style="color:#ef4444">Error: ${escHtml(e.message)}</span>`;
+    }
+  });
+
+  btnOpen.onclick = () => { overlay.classList.add('open'); loadInfo(); };
+  btnClose.onclick = () => overlay.classList.remove('open');
+  btnRefresh.onclick = loadInfo;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
 })();
 </script>
