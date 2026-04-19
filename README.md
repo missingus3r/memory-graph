@@ -85,6 +85,8 @@ The full API has grown past 100 endpoints. Core ones:
 | `GET /embeddings/stats` / `POST /embeddings/reindex` | Embeddings ops |
 | `GET /kv/<key>` / `PUT /kv/<key>` | Key-value store (dashboard positions, etc) |
 | `POST /cron/active` / `GET /cron/active` / `GET /cron/prompts` | Runtime cron snapshot + disk prompt parser |
+| `GET /proposal/list` / `/pending` / `POST /proposal/<id>/approve` | Self-improvement proposals (approve/reject accepts PUT/POST/PATCH since v2.8.0) |
+| `GET /backup/info` / `/export` / `POST /backup/import` | Disaster recovery: whole-DB snapshot export (`VACUUM INTO` .db or `.sql` dump) + validated import with auto-backup of previous |
 
 Full table ownership notes and the soft-observation → structured-knowledge promotion flow live in Friday's `CLAUDE.md` and in the [harness deep-dive](https://missingus3r.github.io/friday-showcase/harness.html).
 
@@ -96,6 +98,24 @@ The server is the single source of truth for everything Friday remembers, believ
 - **Long-term memory** — typed memories, entities, skills. Each row now carries provenance + confidence + last_verified.
 - **Self-improving harness** — goals, plans, capabilities, autonomy, world model, verifier, sandbox, experiments, metrics. All additive.
 - **Runtime state** — active cron snapshot, importance keywords, KV store.
+
+## Backup / Restore
+
+Disaster recovery built into the server since v2.9.0.
+
+```bash
+# Export consistent snapshot (VACUUM INTO, safe while server is running)
+curl -s http://localhost:7777/backup/export -o ~/backups/friday-memory-$(date +%Y%m%d).db
+
+# Plain SQL dump (portable, diffable, slower)
+curl -s 'http://localhost:7777/backup/export?format=dump' -o ~/backups/friday-memory-$(date +%Y%m%d).sql
+
+# Import (validates SQLite + core tables, backs up current as .pre-import-<ts>)
+curl -s -X POST -F "file=@/path/to/snapshot.db" http://localhost:7777/backup/import
+# Then restart the server to reload connections on the new DB
+```
+
+Or use the **💾 Backup** button in the dashboard topbar — info / export / import with a file picker. Recommended: cron-based off-site sync (Drive / Dropbox / external drive).
 
 ## Related
 
