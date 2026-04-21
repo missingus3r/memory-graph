@@ -107,13 +107,19 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
-from flask import Flask, request, jsonify, g, send_file
+from flask import Flask, request, jsonify, g, send_file, session, redirect, make_response
+import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.9.0"
+VERSION = "2.10.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
+
+# ── Auth (protects the /graph UI only, not the API endpoints) ──
+GRAPH_USER = os.environ.get("FRIDAY_GRAPH_USER", "admin")
+GRAPH_PASSWORD = os.environ.get("FRIDAY_GRAPH_PASSWORD", "")
+GRAPH_SECRET = os.environ.get("FRIDAY_GRAPH_SECRET", _secrets.token_hex(32))
 
 
 def safe_int(val, default=50, min_val=1, max_val=1000):
@@ -624,6 +630,75 @@ def init_embeddings_table():
 
 # ── Flask App ──
 app = Flask(__name__)
+app.secret_key = GRAPH_SECRET
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+
+def _graph_auth_ok():
+    return bool(GRAPH_PASSWORD) and session.get("graph_auth") is True
+
+
+LOGIN_PAGE = """<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Memory Graph · Login</title>
+<style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0a0a0f;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif}
+.box{background:#0f0f18;border:1px solid #1f1f2a;padding:32px 28px;border-radius:14px;width:340px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+h1{margin:0 0 4px;font-size:20px;font-weight:700}
+p.sub{margin:0 0 20px;color:#64748b;font-size:13px}
+label{display:block;font-size:11px;letter-spacing:.1em;color:#94a3b8;text-transform:uppercase;margin:10px 0 6px}
+input{width:100%;padding:11px 12px;background:#000;border:1px solid #2a2a3a;border-radius:8px;color:#e2e8f0;font:14px/1.4 inherit;outline:none}
+input:focus{border-color:#00ff41;box-shadow:0 0 0 3px rgba(0,255,65,.1)}
+button{margin-top:18px;width:100%;padding:12px;background:#00ff41;color:#000;border:none;border-radius:8px;font-weight:700;letter-spacing:.05em;cursor:pointer}
+button:hover{background:#fff}
+.err{margin-top:12px;padding:8px 10px;background:rgba(255,45,45,.1);border:1px solid rgba(255,45,45,.3);color:#ff8a80;font-size:12px;border-radius:6px;display:__ERR_DISPLAY__}
+.tag{font-family:ui-monospace,monospace;font-size:10px;color:#64748b;letter-spacing:.15em;margin-top:14px;text-align:center}
+</style></head><body>
+<form class="box" method="post" action="/login">
+<h1>Memory Graph</h1>
+<p class="sub">Acceso restringido. Ingresá credenciales.</p>
+<label for="u">Usuario</label>
+<input id="u" name="username" autocomplete="username" required autofocus>
+<label for="p">Contraseña</label>
+<input id="p" name="password" type="password" autocomplete="current-password" required>
+<button type="submit">INGRESAR</button>
+<div class="err">Credenciales inválidas.</div>
+<div class="tag">v__VERSION__ · Friday Memory Graph</div>
+</form></body></html>
+"""
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not GRAPH_PASSWORD:
+        return jsonify({"error": "login disabled: FRIDAY_GRAPH_PASSWORD not configured"}), 503
+    if request.method == "POST":
+        u = (request.form.get("username") or "").strip()
+        p = request.form.get("password") or ""
+        if u == GRAPH_USER and _secrets.compare_digest(p, GRAPH_PASSWORD):
+            session.permanent = True
+            session["graph_auth"] = True
+            nxt = request.args.get("next", "/graph")
+            if not nxt.startswith("/"):
+                nxt = "/graph"
+            return redirect(nxt)
+        page = LOGIN_PAGE.replace("__ERR_DISPLAY__", "block").replace("__VERSION__", VERSION)
+        resp = make_response(page, 401)
+        resp.headers["Content-Type"] = "text/html; charset=utf-8"
+        return resp
+    if _graph_auth_ok():
+        return redirect("/graph")
+    page = LOGIN_PAGE.replace("__ERR_DISPLAY__", "none").replace("__VERSION__", VERSION)
+    resp = make_response(page)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    return resp
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    session.pop("graph_auth", None)
+    return redirect("/login")
 
 
 @app.teardown_appcontext
@@ -1387,6 +1462,8 @@ def backup_import():
 
 @app.route("/graph")
 def graph():
+    if GRAPH_PASSWORD and not _graph_auth_ok():
+        return redirect("/login?next=/graph")
     graph_path = Path.home() / "proyectos" / "memory-graph" / "index.html"
     if graph_path.exists():
         return send_file(str(graph_path))
