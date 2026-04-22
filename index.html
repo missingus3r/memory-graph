@@ -218,14 +218,20 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
   <div class="legend-item"><div class="legend-dot" style="background:#f97316"></div>Proposal</div>
 </div>
 
-<!-- Claude Code usage modal -->
+<!-- AI usage modal (Claude + Codex) -->
 <div class="usage-modal-overlay" id="usageModal">
   <div class="usage-modal">
-    <h2>Claude Code — Usage</h2>
+    <h2>AI Usage</h2>
+    <div class="usage-section-title" style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.7px;margin:10px 0 6px">Claude Code</div>
     <div class="usage-sub">
       <span id="usageSub">Sin datos — tocá <b>Actualizar</b> para consultar</span>
     </div>
     <div id="usageBody"></div>
+    <div class="usage-section-title" style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.7px;margin:18px 0 6px">Codex</div>
+    <div class="usage-sub">
+      <span id="codexUsageSub">Sin datos — tocá <b>Actualizar</b> para consultar</span>
+    </div>
+    <div id="codexUsageBody"></div>
     <div class="usage-actions">
       <button class="usage-btn-refresh" id="usageRefresh">Actualizar</button>
       <button class="usage-btn-close" id="usageClose">Cerrar</button>
@@ -2337,10 +2343,93 @@ if (['logs','graph','arch','rag','brain','crons'].includes(hashTab)) switchTab(h
     }
   }
 
-  btnOpen.onclick = () => { overlay.classList.add('open'); loadCached(); };
+  btnOpen.onclick = () => { overlay.classList.add('open'); loadCached(); loadCodexCached(); };
   btnClose.onclick = () => overlay.classList.remove('open');
-  btnRefresh.onclick = refresh;
+  btnRefresh.onclick = () => { refresh(); refreshCodex(); };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
+
+  // ─── Codex usage (same modal, separate section) ─────────────
+  const codexBody = $('codexUsageBody');
+  const codexSub = $('codexUsageSub');
+  let codexPollTimer = null;
+
+  function renderCodex(data) {
+    if (!data) {
+      codexBody.innerHTML = '<div class="usage-empty">Sin datos. Tocá <b>Actualizar</b> para consultar /status ahora.</div>';
+      return;
+    }
+    const rows = [];
+    const metaHeader = [];
+    if (data.account) metaHeader.push(`<span><b>Cuenta:</b> ${escapeHtml(data.account.email)} (${escapeHtml(data.account.plan)})</span>`);
+    if (data.model)   metaHeader.push(`<span><b>Modelo:</b> ${escapeHtml(data.model.name)} · ${escapeHtml(data.model.detail)}</span>`);
+    if (metaHeader.length) {
+      rows.push(`<div class="usage-meta" style="margin-bottom:10px">${metaHeader.join('')}</div>`);
+    }
+    if (data.session5h) rows.push(renderRow('Límite 5h', data.session5h.pct_used, data.session5h.resets));
+    if (data.weekly)    rows.push(renderRow('Límite semanal', data.weekly.pct_used, data.weekly.resets));
+    if (!rows.length) {
+      codexBody.innerHTML = '<div class="usage-empty">No se pudo parsear el /status. Probá de nuevo.</div>';
+      return;
+    }
+    codexBody.innerHTML = rows.join('');
+  }
+
+  async function loadCodexCached() {
+    try {
+      const res = await fetch('/usage/codex');
+      const j = await res.json();
+      if (j.fetching) {
+        codexSub.innerHTML = '<span style="color:#fbbf24">⏳ Actualizando...</span>';
+        pollCodexUntilDone();
+      } else if (j.fetched_at) {
+        const r = j.result || {};
+        if (r.error) {
+          codexSub.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b> · <span style="color:#ef4444">error: ${escapeHtml(r.error)}</span>`;
+          codexBody.innerHTML = '<div class="usage-empty">Error al consultar /status. Tocá <b>Actualizar</b> para reintentar.</div>';
+        } else {
+          codexSub.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b>`;
+          renderCodex(r.data);
+        }
+      }
+    } catch (e) {
+      codexSub.textContent = 'Error de red: ' + e.message;
+    }
+  }
+
+  function pollCodexUntilDone() {
+    clearTimeout(codexPollTimer);
+    codexPollTimer = setTimeout(async () => {
+      try {
+        const res = await fetch('/usage/codex');
+        const j = await res.json();
+        if (j.fetching) {
+          pollCodexUntilDone();
+        } else if (j.fetched_at) {
+          const r = j.result || {};
+          if (r.error) {
+            codexSub.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b> · <span style="color:#ef4444">error: ${escapeHtml(r.error)}</span>`;
+            codexBody.innerHTML = '<div class="usage-empty">Error al consultar /status. Tocá <b>Actualizar</b> para reintentar.</div>';
+          } else {
+            codexSub.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b>`;
+            renderCodex(r.data);
+          }
+        }
+      } catch (e) {
+        codexSub.textContent = 'Error: ' + e.message;
+      }
+    }, 2000);
+  }
+
+  async function refreshCodex() {
+    codexBody.innerHTML = '<div class="usage-loading"><div class="spinner"></div>Consultando Codex /status — tarda ~20 segundos...</div>';
+    codexSub.innerHTML = '<span style="color:#fbbf24">⏳ Spawn + /status + parse...</span>';
+    try {
+      await fetch('/usage/codex/refresh', { method: 'POST' });
+      pollCodexUntilDone();
+    } catch (e) {
+      codexSub.textContent = 'Error: ' + e.message;
+    }
+  }
 })();
 </script>
 <script>

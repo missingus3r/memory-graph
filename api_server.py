@@ -112,7 +112,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.11.0"
+VERSION = "2.12.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -3889,6 +3889,162 @@ def usage_claude_refresh():
             "result": _USAGE_CACHE["data"],
         })
     t = threading.Thread(target=_fetch_usage_background, daemon=True)
+    t.start()
+    return jsonify({"started": True, "fetching": True})
+
+
+# ───────────────────────────────────────────────────────────────
+# Codex usage dashboard
+# Spawns `codex` in a pty, sends /status, parses the panel.
+# Mirrors Claude's /usage/claude approach.
+# ───────────────────────────────────────────────────────────────
+_CODEX_USAGE_CACHE = {"data": None, "fetched_at": None, "fetching": False}
+_CODEX_USAGE_LOCK = threading.Lock()
+
+
+def _find_codex_bin():
+    import shutil
+    candidates = [
+        str(Path.home() / ".npm-global/bin/codex"),
+        str(Path.home() / ".local/bin/codex"),
+        "/usr/local/bin/codex",
+        "/usr/bin/codex",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return shutil.which("codex")
+
+
+def _parse_codex(raw):
+    clean = re.sub(r"\s+", " ", _strip_ansi(raw))
+    data = {}
+
+    m = re.search(r"5h\s*limit\s*:?\s*\[[█░▌▏\s]*\]\s*(\d+)\s*%\s*left\s*\(\s*resets?\s+([^)]+?)\)", clean, re.I)
+    if m:
+        pct_left = int(m.group(1))
+        data["session5h"] = {
+            "pct_used": max(0, min(100, 100 - pct_left)),
+            "pct_left": pct_left,
+            "resets": m.group(2).strip(),
+        }
+
+    m = re.search(r"Weekly\s*limit\s*:?\s*\[[█░▌▏\s]*\]\s*(\d+)\s*%\s*left\s*\(\s*resets?\s+([^)]+?)\)", clean, re.I)
+    if m:
+        pct_left = int(m.group(1))
+        data["weekly"] = {
+            "pct_used": max(0, min(100, 100 - pct_left)),
+            "pct_left": pct_left,
+            "resets": m.group(2).strip(),
+        }
+
+    m = re.search(r"Account\s*:?\s*(\S+?@\S+?)\s*\(([^)]+)\)", clean, re.I)
+    if m:
+        data["account"] = {"email": m.group(1).strip(), "plan": m.group(2).strip()}
+
+    m = re.search(r"Model\s*:?\s*([^\s│()]+)\s+\(([^)]+)\)", clean, re.I)
+    if m:
+        data["model"] = {"name": m.group(1).strip(), "detail": m.group(2).strip()}
+
+    return data if (data.get("session5h") or data.get("weekly")) else None
+
+
+def _fetch_codex_usage():
+    """Spawn `codex` via pexpect, send /status, harvest the panel."""
+    try:
+        import pexpect
+    except ImportError:
+        return {"error": "pexpect not installed"}
+
+    binpath = _find_codex_bin()
+    if not binpath:
+        return {"error": "codex binary not found"}
+
+    workdir = Path.home() / ".codex" / ".tmp" / "status-workdir"
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    buf = ""
+    child = None
+    try:
+        child = pexpect.spawn(
+            binpath, dimensions=(60, 140), encoding="utf-8", timeout=None,
+            cwd=str(workdir),
+            env={**os.environ, "TERM": "xterm-256color",
+                 "PWD": str(workdir), "HOME": str(Path.home())},
+        )
+
+        def read_avail(timeout=0.5):
+            try:
+                return child.read_nonblocking(size=100_000, timeout=timeout)
+            except (pexpect.exceptions.TIMEOUT, pexpect.exceptions.EOF):
+                return ""
+            except Exception:
+                return ""
+
+        # Let the REPL boot
+        deadline = time.time() + 8.0
+        while time.time() < deadline:
+            chunk = read_avail(0.4)
+            if chunk:
+                buf += chunk
+
+        child.send("/status")
+        time.sleep(1.0)
+        child.send("\r")
+        time.sleep(0.5)
+        child.send("\n")
+
+        deadline = time.time() + 12.0
+        while time.time() < deadline:
+            chunk = read_avail(0.4)
+            if chunk:
+                buf += chunk
+    finally:
+        if child:
+            try:
+                child.terminate(force=True)
+            except Exception:
+                pass
+
+    data = _parse_codex(buf)
+    if not data:
+        return {"error": "no codex status parsed", "raw_preview": _strip_ansi(buf)[-400:]}
+    return {"ok": True, "data": data}
+
+
+def _fetch_codex_usage_background():
+    with _CODEX_USAGE_LOCK:
+        if _CODEX_USAGE_CACHE["fetching"]:
+            return
+        _CODEX_USAGE_CACHE["fetching"] = True
+    try:
+        result = _fetch_codex_usage()
+        _CODEX_USAGE_CACHE["data"] = result
+        _CODEX_USAGE_CACHE["fetched_at"] = now_iso()
+    finally:
+        _CODEX_USAGE_CACHE["fetching"] = False
+
+
+@app.route("/usage/codex", methods=["GET"])
+def usage_codex_get():
+    return jsonify({
+        "fetched_at": _CODEX_USAGE_CACHE["fetched_at"],
+        "fetching": _CODEX_USAGE_CACHE["fetching"],
+        "result": _CODEX_USAGE_CACHE["data"],
+    })
+
+
+@app.route("/usage/codex/refresh", methods=["POST"])
+def usage_codex_refresh():
+    sync = request.args.get("sync") in ("1", "true")
+    if sync:
+        _fetch_codex_usage_background()
+        return jsonify({
+            "fetched_at": _CODEX_USAGE_CACHE["fetched_at"],
+            "fetching": _CODEX_USAGE_CACHE["fetching"],
+            "result": _CODEX_USAGE_CACHE["data"],
+        })
+    t = threading.Thread(target=_fetch_codex_usage_background, daemon=True)
     t.start()
     return jsonify({"started": True, "fetching": True})
 
