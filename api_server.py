@@ -112,7 +112,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.10.0"
+VERSION = "2.11.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -195,6 +195,10 @@ def init_db():
         "ALTER TABLE skills ADD COLUMN examples TEXT DEFAULT '[]'",
         "ALTER TABLE insights ADD COLUMN provenance TEXT DEFAULT '[]'",
         "ALTER TABLE insights ADD COLUMN last_verified TEXT",
+        "ALTER TABLE insights ADD COLUMN title TEXT DEFAULT ''",
+        "ALTER TABLE insights ADD COLUMN content TEXT DEFAULT ''",
+        "ALTER TABLE insights ADD COLUMN severity TEXT DEFAULT ''",
+        "ALTER TABLE insights ADD COLUMN category TEXT DEFAULT ''",
         "ALTER TABLE world_model ADD COLUMN provenance TEXT DEFAULT '[]'",
         "ALTER TABLE world_model ADD COLUMN last_verified TEXT",
     ]:
@@ -1699,6 +1703,10 @@ def insight_create():
         "evidence": data.get("evidence", ""),
         "confidence": clamp_float(data.get("confidence", 0.5)),
         "valid_until": data.get("valid_until"),
+        "title": data.get("title", ""),
+        "content": data.get("content", ""),
+        "severity": data.get("severity", ""),
+        "category": data.get("category", ""),
         "created_at": ts,
     }, pk="id")
     last_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -1710,11 +1718,13 @@ def insight_active():
     db = get_db()
     ts = now_iso()
     rows = db.execute(
-        "SELECT id, type, pattern, evidence, confidence, valid_until, created_at FROM insights WHERE valid_until IS NULL OR valid_until > ? ORDER BY confidence DESC",
+        "SELECT id, type, pattern, evidence, confidence, valid_until, created_at, title, content, severity, category FROM insights WHERE valid_until IS NULL OR valid_until > ? ORDER BY confidence DESC",
         [ts]
     ).fetchall()
     results = [{"id": r[0], "type": r[1], "pattern": r[2], "evidence": r[3],
-                "confidence": r[4], "valid_until": r[5], "created_at": r[6]} for r in rows]
+                "confidence": r[4], "valid_until": r[5], "created_at": r[6],
+                "title": r[7], "content": r[8], "severity": r[9], "category": r[10]}
+               for r in rows]
     return jsonify({"count": len(results), "results": results})
 
 
@@ -1723,12 +1733,29 @@ def insight_list():
     db = get_db()
     limit = safe_int(request.args.get("limit", "100"), default=100)
     rows = db.execute(
-        "SELECT id, type, pattern, evidence, confidence, valid_until, created_at FROM insights ORDER BY created_at DESC LIMIT ?",
+        "SELECT id, type, pattern, evidence, confidence, valid_until, created_at, title, content, severity, category FROM insights ORDER BY created_at DESC LIMIT ?",
         [limit]
     ).fetchall()
     results = [{"id": r[0], "type": r[1], "pattern": r[2], "evidence": r[3],
-                "confidence": r[4], "valid_until": r[5], "created_at": r[6]} for r in rows]
+                "confidence": r[4], "valid_until": r[5], "created_at": r[6],
+                "title": r[7], "content": r[8], "severity": r[9], "category": r[10]}
+               for r in rows]
     return jsonify({"count": len(results), "results": results})
+
+
+@app.route("/insight/<int:id>", methods=["GET"])
+def insight_get(id):
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, type, pattern, evidence, confidence, valid_until, created_at, title, content, severity, category FROM insights WHERE id = ?",
+        [id]
+    ).fetchall()
+    if not rows:
+        return jsonify({"error": f"Insight {id} not found"}), 404
+    r = rows[0]
+    return jsonify({"id": r[0], "type": r[1], "pattern": r[2], "evidence": r[3],
+                    "confidence": r[4], "valid_until": r[5], "created_at": r[6],
+                    "title": r[7], "content": r[8], "severity": r[9], "category": r[10]})
 
 
 @app.route("/insight/<int:id>", methods=["DELETE"])
