@@ -1613,11 +1613,16 @@ def skill_list():
     db = get_db()
     limit = safe_int(request.args.get("limit", "100"), default=100)
     rows = db.execute(
-        "SELECT id, name, trigger_pattern, description, steps, times_used, last_used, created_at FROM skills ORDER BY times_used DESC LIMIT ?",
+        "SELECT id, name, trigger_pattern, description, steps, times_used, "
+        "last_used, created_at, success_count, failure_count, maturity, "
+        "cost_avg, time_avg_sec FROM skills ORDER BY times_used DESC LIMIT ?",
         [limit]
     ).fetchall()
     results = [{"id": r[0], "name": r[1], "trigger_pattern": r[2], "description": r[3],
-                "steps": r[4], "times_used": r[5], "last_used": r[6], "created_at": r[7]} for r in rows]
+                "steps": r[4], "times_used": r[5], "last_used": r[6], "created_at": r[7],
+                "success_count": r[8] or 0, "failure_count": r[9] or 0,
+                "maturity": r[10] or "draft",
+                "cost_avg": r[11] or 0.0, "time_avg_sec": r[12] or 0.0} for r in rows]
     return jsonify({"count": len(results), "results": results})
 
 
@@ -3604,6 +3609,53 @@ def skill_record(skill_id):
     return jsonify({"status": "recorded", "id": skill_id,
                     "success_count": new_s, "failure_count": new_f,
                     "success_rate": (new_s / total) if total else None})
+
+
+@app.route("/skill/auto_promote", methods=["POST"])
+def skill_auto_promote():
+    """Closed-loop skill ratchet (v2.13). Runs the full graduation rules across
+    all skills:
+      draft   → beta       if success_count >= 1
+      beta    → stable     if success_count >= 3 AND success_rate >= 0.66
+      stable  → deprecated if failure_rate > 0.5 (over total runs)
+    Returns a list of transitions made. Idempotent within a run."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, name, success_count, failure_count, maturity FROM skills"
+    ).fetchall()
+    transitions = []
+    for r in rows:
+        sid, name, sc, fc, maturity = r[0], r[1], r[2] or 0, r[3] or 0, r[4] or "draft"
+        total = sc + fc
+        sr = sc / total if total else 0.0
+        new_maturity = None
+        reason = None
+        if maturity == "draft" and sc >= 1:
+            new_maturity = "beta"
+            reason = f"sc={sc} >= 1"
+        elif maturity == "beta" and sc >= 3 and sr >= 0.66:
+            new_maturity = "stable"
+            reason = f"sc={sc} >= 3 AND sr={sr:.2f} >= 0.66"
+        elif maturity == "stable" and total >= 5 and (fc / total) > 0.5:
+            new_maturity = "deprecated"
+            reason = f"failure_rate={fc/total:.2f} > 0.5 over {total} runs"
+        if new_maturity:
+            db.execute("UPDATE skills SET maturity = ? WHERE id = ?",
+                       [new_maturity, sid])
+            transitions.append({
+                "skill_id": sid,
+                "name": name,
+                "from": maturity,
+                "to": new_maturity,
+                "reason": reason,
+                "runs": total,
+                "success_rate": round(sr, 3),
+            })
+    return jsonify({
+        "status": "ratcheted",
+        "transitions": transitions,
+        "skills_evaluated": len(rows),
+    })
 
 
 @app.route("/skill/<int:skill_id>/promote", methods=["PATCH"])
