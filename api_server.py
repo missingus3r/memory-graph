@@ -103,6 +103,8 @@ import struct
 import math
 import threading
 import time
+import shutil
+import subprocess
 from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import URLError
@@ -204,6 +206,12 @@ def init_db():
         # v2.13: calibration loop — store both raw user-supplied and offset-adjusted confidence
         "ALTER TABLE wm_predictions ADD COLUMN confidence_raw REAL",
         "ALTER TABLE wm_predictions ADD COLUMN confidence_adjusted REAL",
+        # v2.13: proposal apply loop — track apply outcome + rollback metadata
+        "ALTER TABLE proposals ADD COLUMN apply_status TEXT DEFAULT ''",
+        "ALTER TABLE proposals ADD COLUMN applied_at TEXT",
+        "ALTER TABLE proposals ADD COLUMN apply_error TEXT DEFAULT ''",
+        "ALTER TABLE proposals ADD COLUMN backup_path TEXT DEFAULT ''",
+        "ALTER TABLE proposals ADD COLUMN updated_at TEXT",
     ]:
         try:
             conn.execute(mig)
@@ -1830,20 +1838,163 @@ def proposal_list():
     return jsonify({"count": len(results), "results": results})
 
 
+# --- v2.13: proposal apply loop ---
+
+PROPOSAL_BACKUP_DIR = Path.home() / ".friday" / "proposal_backups"
+PROPOSAL_ALLOWED_ROOTS = [Path.home() / "proyectos", Path.home() / ".claude"]
+
+
+def _is_allowed_proposal_path(file_path: str) -> bool:
+    if not file_path:
+        return False
+    try:
+        p = Path(file_path).resolve()
+    except Exception:
+        return False
+    for root in PROPOSAL_ALLOWED_ROOTS:
+        try:
+            p.relative_to(root.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _is_unified_diff(text: str) -> bool:
+    if not text:
+        return False
+    head = text.lstrip()
+    return (head.startswith("--- ") or head.startswith("diff --git")) and "@@" in text
+
+
+def _apply_proposal_diff(proposal_id: int, file_path: str, diff_text: str):
+    """Apply a unified diff to file_path with backup + auto-rollback on failure.
+    Returns (apply_status, error_msg, backup_path).
+    apply_status ∈ {applied, apply_failed, skipped_invalid_diff, skipped_unsafe_path,
+                    skipped_no_target}."""
+    if not _is_allowed_proposal_path(file_path):
+        return ("skipped_unsafe_path",
+                f"path not under allowed roots ({[str(r) for r in PROPOSAL_ALLOWED_ROOTS]})",
+                None)
+    if not _is_unified_diff(diff_text):
+        return ("skipped_invalid_diff",
+                "diff_preview is not a unified diff (--- / @@)",
+                None)
+    target = Path(file_path)
+    if not target.exists():
+        return ("skipped_no_target", f"target file does not exist: {file_path}", None)
+    try:
+        PROPOSAL_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return ("apply_failed", f"backup dir create failed: {e}", None)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = PROPOSAL_BACKUP_DIR / f"{proposal_id}_{ts}_{target.name}"
+    try:
+        shutil.copy2(target, backup)
+    except Exception as e:
+        return ("apply_failed", f"backup failed: {e}", None)
+    try:
+        result = subprocess.run(
+            ["patch", "-p0", "--no-backup-if-mismatch", str(target)],
+            input=diff_text, text=True, capture_output=True, timeout=10
+        )
+        if result.returncode != 0:
+            try:
+                shutil.copy2(backup, target)
+            except Exception:
+                pass
+            err = (result.stderr or result.stdout or "")[:300]
+            return ("apply_failed", f"patch exit {result.returncode}: {err}", str(backup))
+        return ("applied", None, str(backup))
+    except subprocess.TimeoutExpired:
+        try:
+            shutil.copy2(backup, target)
+        except Exception:
+            pass
+        return ("apply_failed", "patch timeout 10s (rolled back)", str(backup))
+    except FileNotFoundError:
+        return ("apply_failed", "`patch` binary not found in PATH", str(backup))
+    except Exception as e:
+        try:
+            shutil.copy2(backup, target)
+        except Exception:
+            pass
+        return ("apply_failed", str(e)[:300], str(backup))
+
+
 @app.route("/proposal/<int:proposal_id>/approve", methods=["PUT", "POST", "PATCH"])
 def proposal_approve(proposal_id):
+    """Approve a proposal AND attempt to auto-apply its diff (v2.13 closed loop).
+    Body: {dry_run: false} — set dry_run=true to mark approved without applying."""
     db = get_db()
+    row = db.execute(
+        "SELECT file_path, diff_preview FROM proposals WHERE id = ?",
+        [proposal_id]).fetchone()
+    if not row:
+        return jsonify({"error": "Proposal not found"}), 404
+    data = request.json or {}
+    dry_run = bool(data.get("dry_run", False))
+    file_path, diff_text = row[0], row[1]
     ts = now_iso()
-    db.execute("UPDATE proposals SET status = 'approved', resolved_at = ? WHERE id = ?", [ts, proposal_id])
-    return jsonify({"status": "approved", "id": proposal_id})
+    if dry_run:
+        db.execute(
+            "UPDATE proposals SET status = 'approved', resolved_at = ?, "
+            "apply_status = 'dry_run', updated_at = ? WHERE id = ?",
+            [ts, ts, proposal_id])
+        return jsonify({"status": "approved", "id": proposal_id, "apply_status": "dry_run"})
+    apply_status, apply_error, backup_path = _apply_proposal_diff(
+        proposal_id, file_path, diff_text)
+    db.execute(
+        "UPDATE proposals SET status = 'approved', resolved_at = ?, "
+        "apply_status = ?, applied_at = ?, apply_error = ?, "
+        "backup_path = ?, updated_at = ? WHERE id = ?",
+        [ts, apply_status,
+         ts if apply_status == "applied" else None,
+         apply_error or "",
+         backup_path or "",
+         ts, proposal_id])
+    return jsonify({
+        "status": "approved",
+        "id": proposal_id,
+        "apply_status": apply_status,
+        "apply_error": apply_error,
+        "backup_path": backup_path,
+    })
 
 
 @app.route("/proposal/<int:proposal_id>/reject", methods=["PUT", "POST", "PATCH"])
 def proposal_reject(proposal_id):
     db = get_db()
     ts = now_iso()
-    db.execute("UPDATE proposals SET status = 'rejected', resolved_at = ? WHERE id = ?", [ts, proposal_id])
+    db.execute(
+        "UPDATE proposals SET status = 'rejected', resolved_at = ?, updated_at = ? WHERE id = ?",
+        [ts, ts, proposal_id])
     return jsonify({"status": "rejected", "id": proposal_id})
+
+
+@app.route("/proposal/<int:proposal_id>/rollback", methods=["POST"])
+def proposal_rollback(proposal_id):
+    """Restore the file from the backup created when the proposal was applied."""
+    db = get_db()
+    row = db.execute(
+        "SELECT file_path, backup_path, apply_status FROM proposals WHERE id = ?",
+        [proposal_id]).fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    file_path, backup_path, apply_status = row[0], row[1], row[2]
+    if apply_status != "applied":
+        return jsonify({"error": f"cannot rollback (apply_status={apply_status})"}), 400
+    if not backup_path or not Path(backup_path).exists():
+        return jsonify({"error": "backup missing"}), 404
+    try:
+        shutil.copy2(backup_path, file_path)
+    except Exception as e:
+        return jsonify({"error": f"rollback failed: {e}"}), 500
+    ts = now_iso()
+    db.execute(
+        "UPDATE proposals SET apply_status = 'rolled_back', updated_at = ? WHERE id = ?",
+        [ts, proposal_id])
+    return jsonify({"status": "rolled_back", "id": proposal_id, "restored_from": backup_path})
 
 
 # -- World Model --
