@@ -2584,6 +2584,25 @@ def memory_decay():
     decayed["memories"] = _decay_table("memories", "id", "confidence", "last_verified", "updated_at")
     decayed["entities"] = _decay_table("entities", "id", "confidence", "last_verified", "updated_at")
     decayed["world_model"] = _decay_table("world_model", "id", "confidence", "last_verified", "last_seen")
+
+    # v2.13: insights have a valid_until field — actually enforce expiry.
+    # Mark expired insights as confidence=0 + add 'expired' tag in category if empty.
+    expired_insights = 0
+    now_iso_str = now.isoformat()
+    rows = db.execute(
+        "SELECT id, valid_until, confidence, category FROM insights "
+        "WHERE valid_until IS NOT NULL AND valid_until != '' AND valid_until < ?",
+        [now_iso_str]).fetchall()
+    for r in rows:
+        iid, _, conf, cat = r[0], r[1], r[2], r[3] or ""
+        if (conf or 0.0) > 0.05 or "expired" not in cat:
+            new_cat = cat if "expired" in cat else (f"{cat},expired" if cat else "expired")
+            db.execute(
+                "UPDATE insights SET confidence = 0.0, category = ? WHERE id = ?",
+                [new_cat, iid])
+            expired_insights += 1
+    decayed["insights_expired"] = expired_insights
+
     return jsonify({"status": "decayed", "halflife_days": halflife_days, "changes": decayed})
 
 
