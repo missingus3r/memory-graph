@@ -218,6 +218,26 @@ def init_db():
         except Exception:
             pass  # Already applied
 
+    # v2.13: Phase 3 — performance indexes on frequently-queried foreign keys.
+    # plan_tree.goal_id is filtered on goal-detail views; wm_entities.entity_key
+    # is the natural lookup key + UNIQUE upsert hot path; wm_predictions.resolved
+    # is the calibration loop's main filter; proposals.status drives
+    # /proposal/pending and /proposal/list?status=...
+    for idx_sql in [
+        "CREATE INDEX IF NOT EXISTS idx_plan_tree_goal ON plan_tree(goal_id)",
+        "CREATE INDEX IF NOT EXISTS idx_wm_entity_key ON wm_entities(entity_key)",
+        "CREATE INDEX IF NOT EXISTS idx_wm_pred_resolved ON wm_predictions(resolved)",
+        "CREATE INDEX IF NOT EXISTS idx_wm_pred_resolved_at ON wm_predictions(resolved_at)",
+        "CREATE INDEX IF NOT EXISTS idx_proposal_status ON proposals(status)",
+        "CREATE INDEX IF NOT EXISTS idx_sandbox_action ON sandbox_executions(action)",
+        "CREATE INDEX IF NOT EXISTS idx_skill_maturity ON skills(maturity)",
+        "CREATE INDEX IF NOT EXISTS idx_verify_subject ON verifications(subject_type, subject_id)",
+    ]:
+        try:
+            conn.execute(idx_sql)
+        except Exception:
+            pass
+
     if "conversations_fts" not in db.table_names():
         db.executescript("""
             CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts
@@ -2554,7 +2574,18 @@ def memory_decay():
     now = datetime.datetime.now(datetime.timezone.utc)
     decayed = {"memories": 0, "entities": 0, "world_model": 0}
 
+    # v2.13 Phase 3: hardened against accidental SQL injection via column-name
+    # f-string. Only allowlisted (table, cols) tuples are accepted. Caller
+    # must pass exact identifiers from this set.
+    _DECAY_ALLOWLIST = {
+        ("memories", "id", "confidence", "last_verified", "updated_at"),
+        ("entities", "id", "confidence", "last_verified", "updated_at"),
+        ("world_model", "id", "confidence", "last_verified", "last_seen"),
+    }
+
     def _decay_table(table, id_col, conf_col, verified_col, fallback_col):
+        if (table, id_col, conf_col, verified_col, fallback_col) not in _DECAY_ALLOWLIST:
+            raise ValueError(f"unauthorized decay target: {(table, id_col, conf_col, verified_col, fallback_col)}")
         rows = db.execute(
             f"SELECT {id_col}, {conf_col}, {verified_col}, {fallback_col} FROM {table}"
         ).fetchall()
