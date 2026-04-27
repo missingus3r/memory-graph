@@ -3401,12 +3401,14 @@ def verify_create():
     ts = now_iso()
     def _s(v):
         return v if isinstance(v, str) else json.dumps(v or [], ensure_ascii=False)
+    passed = bool(data.get("passed"))
+    verifier_conf = clamp_float(data.get("confidence", 0.5), default=0.5)
     db["verifications"].insert({
         "subject_type": subject_type,
         "subject_id": subject_id,
         "check_type": check_type,
-        "passed": 1 if data.get("passed") else 0,
-        "confidence": clamp_float(data.get("confidence", 0.5), default=0.5),
+        "passed": 1 if passed else 0,
+        "confidence": verifier_conf,
         "reason": data.get("reason", ""),
         "evidence": _s(data.get("evidence", "")),
         "sources": _s(data.get("sources", [])),
@@ -3414,7 +3416,38 @@ def verify_create():
         "required_evidence": 1 if data.get("required_evidence") else 0,
         "created_at": ts,
     })
-    return jsonify({"status": "recorded"})
+    # v2.13 closed loop: feed verification result back to the subject's
+    # confidence + last_verified timestamp.
+    confidence_delta = 0.0
+    propagated = False
+    try:
+        sid_int = int(subject_id) if subject_id.isdigit() else None
+    except Exception:
+        sid_int = None
+    if sid_int is not None and subject_type in ("memory", "entity"):
+        table = "memories" if subject_type == "memory" else "entities"
+        # Adjust confidence: pass → +0.5*verifier_conf*(1-current), fail → -0.5*verifier_conf*current
+        # Both clamp to [0.05, 0.99] and update last_verified.
+        row = db.execute(
+            f"SELECT confidence FROM {table} WHERE id = ?", [sid_int]).fetchone()
+        if row:
+            current = row[0] if row[0] is not None else 0.8
+            if passed:
+                confidence_delta = 0.5 * verifier_conf * (1 - current)
+            else:
+                confidence_delta = -0.5 * verifier_conf * current
+            new_conf = max(0.05, min(0.99, current + confidence_delta))
+            db.execute(
+                f"UPDATE {table} SET confidence = ?, last_verified = ? WHERE id = ?",
+                [new_conf, ts, sid_int])
+            propagated = True
+    return jsonify({
+        "status": "recorded",
+        "feedback": {
+            "propagated_to_subject": propagated,
+            "confidence_delta": round(confidence_delta, 4),
+        },
+    })
 
 
 @app.route("/verify/list", methods=["GET"])
