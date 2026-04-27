@@ -112,7 +112,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.12.0"
+VERSION = "2.13.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -201,6 +201,9 @@ def init_db():
         "ALTER TABLE insights ADD COLUMN category TEXT DEFAULT ''",
         "ALTER TABLE world_model ADD COLUMN provenance TEXT DEFAULT '[]'",
         "ALTER TABLE world_model ADD COLUMN last_verified TEXT",
+        # v2.13: calibration loop — store both raw user-supplied and offset-adjusted confidence
+        "ALTER TABLE wm_predictions ADD COLUMN confidence_raw REAL",
+        "ALTER TABLE wm_predictions ADD COLUMN confidence_adjusted REAL",
     ]:
         try:
             conn.execute(mig)
@@ -3110,22 +3113,54 @@ def wm_event_list():
     return jsonify({"count": len(results), "events": results})
 
 
+def _compute_calibration_offset(db, days=30, min_samples=5):
+    """Closed-loop calibration. Returns mean signed Brier-like error over recent
+    resolved predictions. Positive = overconfident (lower future conf).
+    Negative = underconfident (raise future conf)."""
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).isoformat()
+    rows = db.execute(
+        "SELECT calibration FROM wm_predictions "
+        "WHERE resolved=1 AND calibration IS NOT NULL AND resolved_at >= ?",
+        [cutoff]).fetchall()
+    n = len(rows)
+    if n < min_samples:
+        return {"offset": 0.0, "samples": n, "sufficient": False, "window_days": days}
+    avg = sum(r[0] for r in rows) / n
+    return {"offset": avg, "samples": n, "sufficient": True, "window_days": days}
+
+
+@app.route("/calibration/current", methods=["GET"])
+def calibration_current():
+    """Returns the live calibration offset to apply to new predictions."""
+    db = get_db()
+    days = safe_int(request.args.get("days"), default=30, max_val=365)
+    return jsonify(_compute_calibration_offset(db, days=days))
+
+
 @app.route("/wm/prediction", methods=["POST"])
 def wm_prediction_create():
-    """Create a testable prediction. Body: {hypothesis, condition, predicted_outcome, counterfactual?, confidence?, due_at?}"""
+    """Create a testable prediction. Body: {hypothesis, condition, predicted_outcome, counterfactual?, confidence?, due_at?}.
+    v2.13: applies calibration offset from recently resolved predictions to produce
+    confidence_adjusted (the forecast actually used). confidence_raw stores the
+    user-supplied value for audit."""
     db = get_db()
     data = request.json or {}
     hypothesis = (data.get("hypothesis") or "").strip()
     outcome = (data.get("predicted_outcome") or "").strip()
     if not hypothesis or not outcome:
         return jsonify({"error": "hypothesis and predicted_outcome required"}), 400
+    raw = clamp_float(data.get("confidence", 0.5), default=0.5)
+    cal = _compute_calibration_offset(db)
+    adjusted = max(0.05, min(0.95, raw - cal["offset"])) if cal["sufficient"] else raw
     ts = now_iso()
     db["wm_predictions"].insert({
         "hypothesis": hypothesis,
         "condition": data.get("condition", ""),
         "predicted_outcome": outcome,
         "counterfactual": data.get("counterfactual", ""),
-        "confidence": clamp_float(data.get("confidence", 0.5), default=0.5),
+        "confidence": adjusted,           # the forecast actually used (calibrated)
+        "confidence_raw": raw,            # user-supplied original
+        "confidence_adjusted": adjusted,  # mirror for analytics
         "due_at": data.get("due_at", ""),
         "resolved": 0,
         "actual_outcome": "",
@@ -3134,7 +3169,13 @@ def wm_prediction_create():
         "created_at": ts,
         "updated_at": ts,
     })
-    return jsonify({"status": "created"})
+    return jsonify({
+        "status": "created",
+        "confidence_raw": raw,
+        "confidence_adjusted": adjusted,
+        "calibration_offset_applied": cal["offset"] if cal["sufficient"] else 0.0,
+        "calibration_samples": cal["samples"],
+    })
 
 
 @app.route("/wm/prediction/list", methods=["GET"])
@@ -3142,19 +3183,23 @@ def wm_prediction_list():
     db = get_db()
     resolved = request.args.get("resolved", "")
     limit = safe_int(request.args.get("limit"), default=50, max_val=500)
+    cols = ("id, hypothesis, condition, predicted_outcome, counterfactual, "
+            "confidence, due_at, resolved, actual_outcome, resolved_at, "
+            "calibration, created_at, confidence_raw, confidence_adjusted")
     if resolved in ("1", "0"):
         rows = db.execute(
-            "SELECT id, hypothesis, condition, predicted_outcome, counterfactual, confidence, due_at, resolved, actual_outcome, resolved_at, calibration, created_at FROM wm_predictions WHERE resolved = ? ORDER BY created_at DESC LIMIT ?",
+            f"SELECT {cols} FROM wm_predictions WHERE resolved = ? ORDER BY created_at DESC LIMIT ?",
             [int(resolved), limit]).fetchall()
     else:
         rows = db.execute(
-            "SELECT id, hypothesis, condition, predicted_outcome, counterfactual, confidence, due_at, resolved, actual_outcome, resolved_at, calibration, created_at FROM wm_predictions ORDER BY created_at DESC LIMIT ?",
+            f"SELECT {cols} FROM wm_predictions ORDER BY created_at DESC LIMIT ?",
             [limit]).fetchall()
     results = [{"id": r[0], "hypothesis": r[1], "condition": r[2],
                 "predicted_outcome": r[3], "counterfactual": r[4],
                 "confidence": r[5], "due_at": r[6], "resolved": bool(r[7]),
                 "actual_outcome": r[8], "resolved_at": r[9],
-                "calibration": r[10], "created_at": r[11]} for r in rows]
+                "calibration": r[10], "created_at": r[11],
+                "confidence_raw": r[12], "confidence_adjusted": r[13]} for r in rows]
     return jsonify({"count": len(results), "predictions": results})
 
 
