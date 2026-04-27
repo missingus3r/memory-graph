@@ -147,6 +147,33 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
 .usage-loading .spinner{width:24px;height:24px;border:2px solid rgba(255,255,255,0.1);border-top-color:#34d399;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 10px}
 @keyframes spin{to{transform:rotate(360deg)}}
 
+/* Phase 4: Toast notifications (SSE harness writes) */
+#toastStack{position:fixed;top:60px;right:14px;z-index:9999;display:flex;flex-direction:column;gap:6px;pointer-events:none}
+.toast{padding:6px 12px;border-radius:8px;background:rgba(15,15,25,0.95);border:1px solid rgba(52,211,153,0.3);color:#34d399;font-size:11px;font-family:'Inter',monospace;backdrop-filter:blur(12px);box-shadow:0 8px 24px rgba(0,0,0,0.5);animation:toastFade 2.2s ease forwards;white-space:nowrap}
+@keyframes toastFade{0%{transform:translateX(20px);opacity:0}10%{transform:translateX(0);opacity:1}80%{opacity:1}100%{opacity:0;transform:translateY(-8px)}}
+
+/* Phase 4: Loop health rows */
+.loop-row{padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);cursor:pointer;transition:background 0.15s}
+.loop-row:hover{background:rgba(255,255,255,0.05)}
+.loop-row.expanded{background:rgba(255,255,255,0.04)}
+.loop-row .loop-detail{display:none;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);font-size:11px;color:#94a3b8;line-height:1.5}
+.loop-row.expanded .loop-detail{display:block}
+
+/* Phase 4: Action buttons (apply/reject/rollback/promote) */
+.act-btn{padding:4px 10px;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid;background:transparent;transition:all 0.15s}
+.act-btn:hover:not(:disabled){filter:brightness(1.2)}
+.act-btn:disabled{opacity:0.4;cursor:not-allowed}
+.act-btn.apply{border-color:#22c55e;color:#22c55e;background:rgba(34,197,94,0.08)}
+.act-btn.dry{border-color:#94a3b8;color:#94a3b8;background:rgba(148,163,184,0.05)}
+.act-btn.reject{border-color:#ef4444;color:#ef4444;background:rgba(239,68,68,0.08)}
+.act-btn.rollback{border-color:#f59e0b;color:#f59e0b;background:rgba(245,158,11,0.08)}
+.act-btn.promote{border-color:#34d399;color:#34d399;background:rgba(52,211,153,0.08)}
+.act-btn.copy{border-color:#60a5fa;color:#60a5fa;background:rgba(96,165,250,0.08)}
+
+/* Phase 4: Confirm modal */
+#confirmOverlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:500;display:none}
+#confirmModal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#0f0f1a;border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:22px;width:min(440px,90vw);z-index:501;display:none;box-shadow:0 20px 60px rgba(0,0,0,0.7)}
+
 /* Mobile */
 @media(max-width:640px){
   .topbar{padding:8px 10px;gap:8px}
@@ -330,7 +357,12 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
       <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0 0 6px 0">🧠 Overview</h2>
       <p style="color:#64748b;font-size:12px;margin:0 0 16px 0">Pulso actual del sistema — un vistazo rápido antes de bajar a cada subsistema.</p>
       <div id="brainOverview" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:16px"></div>
-      <div id="brainKpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px"></div>
+      <div id="brainKpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:18px"></div>
+      <!-- Phase 4 #3: Closed Loops panel -->
+      <div id="brainClosedLoops" style="padding:14px;border-radius:10px;border:1px solid rgba(52,211,153,0.18);background:rgba(52,211,153,0.04)">
+        <h3 style="color:#34d399;font-size:13px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:0.5px">🔁 Closed Loops (v2.13)</h3>
+        <div id="brainLoopsBody" style="display:grid;gap:6px"><div style="color:#64748b;font-size:11px">Cargando...</div></div>
+      </div>
     </section>
 
     <!-- 2. GOALS & PLANS -->
@@ -413,6 +445,10 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <section class="brain-section" id="brain-metrics" style="margin-bottom:40px">
       <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0 0 6px 0">📊 Métricas</h2>
       <p style="color:#64748b;font-size:12px;margin:0 0 14px 0">Los KPIs que prueban si el sistema realmente mejora.</p>
+      <!-- Phase 4 #2: Calibration trend chart -->
+      <div id="calibrationChart" style="margin-bottom:14px;padding:14px;border-radius:10px;border:1px solid rgba(245,158,11,0.2);background:rgba(245,158,11,0.03)">
+        <div style="color:#64748b;font-size:11px">Cargando calibration trend...</div>
+      </div>
       <div id="metricsCatalog" style="margin-bottom:14px;padding:12px;border-radius:10px;border:1px solid rgba(96,165,250,0.2);background:rgba(96,165,250,0.03)"></div>
       <div id="metricsList" style="display:grid;gap:8px"></div>
     </section>
@@ -443,6 +479,19 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
 <div class="arch-modal" id="archModal">
   <button class="arch-modal-close" onclick="closeArchModal()">&times;</button>
   <div id="archModalContent"></div>
+</div>
+
+<!-- Phase 4: Toast stack for SSE harness writes -->
+<div id="toastStack"></div>
+<!-- Phase 4: Confirm modal for proposal/skill actions -->
+<div id="confirmOverlay" onclick="closeConfirm()"></div>
+<div id="confirmModal">
+  <h3 id="confirmTitle" style="color:#e2e8f0;font-size:14px;font-weight:700;margin:0 0 10px 0">¿Confirmar?</h3>
+  <div id="confirmBody" style="color:#94a3b8;font-size:12px;line-height:1.5;margin-bottom:14px"></div>
+  <div style="display:flex;gap:8px;justify-content:flex-end">
+    <button onclick="closeConfirm()" style="padding:7px 14px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:transparent;color:#94a3b8;font-size:12px;cursor:pointer">Cancelar</button>
+    <button id="confirmOkBtn" style="padding:7px 14px;border-radius:6px;border:1px solid #22c55e;background:rgba(34,197,94,0.15);color:#22c55e;font-size:12px;font-weight:600;cursor:pointer">Confirmar</button>
+  </div>
 </div>
 
 <script>
@@ -1365,15 +1414,47 @@ async function doRagSearch() {
   }
 }
 
+// Phase 4 #7: reindex with completion polling (every 3s, finishes when count
+// stops growing for 2 polls AND matches /stats memory count).
+let _reindexPoll = null;
 function doReindex() {
-  document.getElementById('reindexStatus').textContent = 'Reindexando...';
+  const statusEl = document.getElementById('reindexStatus');
+  statusEl.textContent = '⏳ Reindexando... iniciando';
   document.getElementById('reindexBtn').disabled = true;
-  fetch(API + '/embeddings/reindex', {method:'POST'}).then(r => r.json()).then(d => {
-    document.getElementById('reindexStatus').textContent = 'Reindex iniciado en background. Refrescá en unos minutos.';
-    document.getElementById('reindexBtn').disabled = false;
-    setTimeout(loadRagDashboard, 10000);
+  if (_reindexPoll) clearInterval(_reindexPoll);
+  fetch(API + '/embeddings/reindex', {method:'POST'}).then(r => r.json()).then(_d => {
+    let lastCount = -1, stableCount = 0, polls = 0;
+    _reindexPoll = setInterval(async () => {
+      polls += 1;
+      try {
+        const [emb, st] = await Promise.all([
+          fetch(API + '/embeddings/stats').then(r => r.json()),
+          fetch(API + '/stats').then(r => r.json()),
+        ]);
+        const total = emb.total || 0;
+        const memCount = (emb.by_type || {}).memory || 0;
+        const totalMem = st.memories || 0;
+        const convCount = (emb.by_type || {}).conversation || 0;
+        statusEl.innerHTML = `⏳ Reindexando · embeddings=<b style="color:#34d399">${total}</b> · mem ${memCount}/${totalMem} · conv ${convCount} · poll #${polls}`;
+        if (total === lastCount) stableCount += 1; else stableCount = 0;
+        lastCount = total;
+        // Done condition: stable for 2 polls AND memories fully covered
+        if (stableCount >= 2 && memCount >= totalMem && totalMem > 0) {
+          clearInterval(_reindexPoll); _reindexPoll = null;
+          statusEl.innerHTML = `<span style="color:#34d399;font-weight:600">✓ Reindex complete · ${total} embeddings (${polls} polls)</span>`;
+          document.getElementById('reindexBtn').disabled = false;
+          loadRagDashboard();
+        }
+        // Safety: stop after 200 polls (~10 min)
+        if (polls >= 200) {
+          clearInterval(_reindexPoll); _reindexPoll = null;
+          statusEl.innerHTML = `<span style="color:#f59e0b">⚠ Timeout polling. embeddings=${total}. Refrescá manualmente.</span>`;
+          document.getElementById('reindexBtn').disabled = false;
+        }
+      } catch (e) { /* keep polling silently */ }
+    }, 3000);
   }).catch(e => {
-    document.getElementById('reindexStatus').textContent = 'Error: ' + e.message;
+    statusEl.textContent = 'Error: ' + e.message;
     document.getElementById('reindexBtn').disabled = false;
   });
 }
@@ -1470,11 +1551,16 @@ async function renderCrons() {
     if (!persisted.length) {
       persistedEl.innerHTML = '<div style="color:#64748b;font-size:12px">cron-prompts.md no encontrado en disco.</div>';
     } else {
-      persistedEl.innerHTML = persisted.map(s => {
+      // Stash sections globally so copy buttons can read body content by index
+      window._cronPersisted = persisted;
+      persistedEl.innerHTML = persisted.map((s, idx) => {
         const next = s.cron_expr ? cronNext(s.cron_expr, new Date()) : null;
         const inRuntime = runCrons.some(c => (c.cron_expr||'').trim() === (s.cron_expr||'').trim());
         const color = inRuntime ? '#94a3b8' : '#ef4444';
         const label = inRuntime ? 'sincronizado' : '⚠ no corriendo';
+        // Phase 4 #6: copy-to-clipboard button when not in runtime
+        const copyBtn = inRuntime ? '' :
+          `<button class="act-btn copy" onclick="copyCronPrompt(${idx})" style="margin-top:6px">📋 Copy prompt for CronCreate</button>`;
         return `<div style="padding:10px 12px;border-radius:10px;border:1px solid rgba(148,163,184,0.15);background:rgba(148,163,184,0.03)">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
             <div style="flex:1;min-width:180px">
@@ -1484,6 +1570,7 @@ async function renderCrons() {
             <span style="font-size:10px;color:${color};background:${color}1a;padding:2px 8px;border-radius:6px;white-space:nowrap">${label}</span>
           </div>
           ${next ? `<div style="font-size:10px;color:#64748b;margin-top:4px">próximo: ${next.toLocaleString('es-UY', {month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
+          ${copyBtn}
         </div>`;
       }).join('');
     }
@@ -1506,6 +1593,26 @@ async function renderCrons() {
   }
 }
 
+// Phase 4 #6: copy persisted cron prompt body to clipboard for manual CronCreate
+async function copyCronPrompt(idx) {
+  const sections = window._cronPersisted || [];
+  const s = sections[idx];
+  if (!s) return;
+  const text = `Cron: ${s.cron_expr || '—'}\nTitle: ${s.title || '—'}\n\nPrompt:\n${s.body || ''}`;
+  try {
+    await navigator.clipboard.writeText(text);
+    _toast(`📋 copiado: "${(s.title||'').slice(0,40)}"`, '#60a5fa');
+  } catch (e) {
+    // Fallback: select via temp textarea
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position='fixed'; ta.style.left='-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); _toast('📋 copiado (fallback)', '#60a5fa'); }
+    catch(_){ alert('Copy falló: '+e.message); }
+    document.body.removeChild(ta);
+  }
+}
+
 // Track actual topbar height so panels never overlap on mobile wrap
 function _syncTopbarHeight() {
   const tb = document.querySelector('.topbar');
@@ -1519,20 +1626,64 @@ window.addEventListener('resize', _syncTopbarHeight);
 setTimeout(_syncTopbarHeight, 300);
 setTimeout(_syncTopbarHeight, 1200);
 
-// === Brain Dashboard (consolidated v2.1.0) ===
+// === Brain Dashboard (consolidated v2.1.0, Phase 4 lazy-load) ===
+// Tracks which sub-sections have already been fetched so we don't refetch on every tab visit.
+window._brainLoaded = window._brainLoaded || {};
 async function renderBrain() {
   _renderBrainSubNav();
+  // Always render overview + KPIs (cheap and what users land on)
   _renderBrainOverviewAndKpis();
-  renderGoals();
-  renderPlans();
-  renderCaps();
-  renderWM();
-  renderExperiments();
-  renderMetrics();
-  _renderBrainMemory();
-  _renderBrainSafety();
-  _renderBrainLearning();
+  _renderClosedLoops();           // Phase 4 #3
   _renderHarnessActivity();
+  _startHarnessLiveWatch();       // Phase 4 #8 (polling fallback)
+  // Lazy-load other sections only when user expands/scrolls into them.
+  // Hooks installed once per session.
+  _installBrainLazyLoaders();
+}
+
+// Phase 4 #1: lazy-load every Brain sub-section. Heavy fetches deferred until
+// the user clicks the section header (or it scrolls into view).
+function _installBrainLazyLoaders() {
+  if (window._brainLazyInstalled) return;
+  window._brainLazyInstalled = true;
+  const sections = [
+    {id:'brain-goals', loader: () => { renderGoals(); renderPlans(); }},
+    {id:'brain-memory', loader: () => _renderBrainMemory()},
+    {id:'brain-world', loader: () => renderWM()},
+    {id:'brain-self', loader: () => renderCaps()},
+    {id:'brain-safety', loader: () => _renderBrainSafety()},
+    {id:'brain-learning', loader: () => { renderExperiments(); _renderBrainLearning(); }},
+    {id:'brain-metrics', loader: () => renderMetrics()},
+  ];
+  // IntersectionObserver loads when the section enters viewport (or when subnav clicks scroll to it)
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting && !window._brainLoaded[e.target.id]) {
+        const cfg = sections.find(s => s.id === e.target.id);
+        if (cfg) { window._brainLoaded[e.target.id] = true; cfg.loader(); }
+      }
+    });
+  }, {root: null, rootMargin: '200px', threshold: 0.01});
+  sections.forEach(s => {
+    const el = document.getElementById(s.id);
+    if (el) io.observe(el);
+  });
+  window._brainObserver = io;
+}
+
+// Force-load a section (used by sub-nav clicks for instant render)
+function _ensureBrainSectionLoaded(sectionId) {
+  if (window._brainLoaded[sectionId]) return;
+  const map = {
+    'brain-goals': () => { renderGoals(); renderPlans(); },
+    'brain-memory': () => _renderBrainMemory(),
+    'brain-world': () => renderWM(),
+    'brain-self': () => renderCaps(),
+    'brain-safety': () => _renderBrainSafety(),
+    'brain-learning': () => { renderExperiments(); _renderBrainLearning(); },
+    'brain-metrics': () => renderMetrics(),
+  };
+  if (map[sectionId]) { window._brainLoaded[sectionId] = true; map[sectionId](); }
 }
 
 async function _renderHarnessActivity() {
@@ -1588,7 +1739,7 @@ function _renderBrainSubNav() {
     ['brain-learning', '🧪 Learning'],
     ['brain-metrics', '📊 Metrics'],
   ];
-  nav.innerHTML = items.map(([id, label]) => `<button onclick="document.getElementById('${id}').scrollIntoView({behavior:'smooth', block:'start'})" style="padding:6px 12px;border-radius:999px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.03);color:#e2e8f0;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">${label}</button>`).join('');
+  nav.innerHTML = items.map(([id, label]) => `<button onclick="_ensureBrainSectionLoaded('${id}');document.getElementById('${id}').scrollIntoView({behavior:'smooth', block:'start'})" style="padding:6px 12px;border-radius:999px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.03);color:#e2e8f0;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">${label}</button>`).join('');
   nav.dataset.built = '1';
 }
 
@@ -1665,6 +1816,7 @@ async function _renderBrainOverviewAndKpis() {
 window._brainCache = window._brainCache || {};
 window._brainExpanded = window._brainExpanded || { episodic:false, semantic:false, entities:false, skills:false };
 window._brainCollapsed = window._brainCollapsed || {};
+window._brainSubLoaded = window._brainSubLoaded || {};
 const BRAIN_INITIAL_LIMIT = 10;
 
 function toggleBrainCollapse(key) {
@@ -1677,6 +1829,36 @@ function toggleBrainCollapse(key) {
   const collapsed = window._brainCollapsed[key];
   wrap.style.display = collapsed ? 'none' : 'block';
   if (chev) chev.textContent = collapsed ? '▶' : '▼';
+  // Phase 4 #1: lazy-fetch the data the first time this sub-section is opened
+  if (!collapsed && !window._brainSubLoaded[key]) {
+    window._brainSubLoaded[key] = true;
+    _loadBrainSubSection(key);
+  }
+}
+
+async function _loadBrainSubSection(key) {
+  try {
+    if (key === 'episodic') {
+      const ep = await fetch('/memory/episodic?hours=48&limit=200').then(r => r.json());
+      _renderEpisodic(ep.events || []);
+    } else if (key === 'semantic') {
+      const sem = await fetch('/memory/semantic?limit=500').then(r => r.json());
+      _renderSemantic(sem.memories || []);
+      // entities ride together since /memory/semantic returns both
+      window._brainSubLoaded.entities = true;
+      _renderEntities(sem.entities || []);
+    } else if (key === 'entities') {
+      const sem = await fetch('/memory/semantic?limit=500').then(r => r.json());
+      _renderEntities(sem.entities || []);
+    } else if (key === 'skills') {
+      const proc = await fetch('/memory/procedural?limit=200').then(r => r.json());
+      _renderSkillsList(proc.skills || []);
+    }
+  } catch (e) {
+    const elMap = {episodic:'memEpisodic',semantic:'memSemanticMemories',entities:'memEntities',skills:'memProcedural'};
+    const el = document.getElementById(elMap[key]);
+    if (el) el.innerHTML = `<div style="color:#ef4444;font-size:11px">Error: ${e.message}</div>`;
+  }
 }
 
 function toggleBrainShowAll(key) {
@@ -1757,6 +1939,66 @@ function _brainRenderList(key, items, renderCardFn, emptyMsg='(vacío)') {
   return `<div style="display:grid;gap:6px">${cards}</div>${btn}`;
 }
 
+function _renderEpisodic(events) {
+  document.getElementById('memEpisodic').innerHTML = _brainRenderList('episodic', events, (e, i) => {
+    const color = e.source === 'conversation' ? '#60a5fa' : '#c084fc';
+    const label = e.role || e.category || e.source || '';
+    const ts = (e.timestamp||'').slice(11,16);
+    return `<div onclick="openBrainDetail('episodic',${i})" style="padding:6px 10px;border-radius:6px;border-left:2px solid ${color};background:rgba(255,255,255,0.02);cursor:pointer" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='rgba(255,255,255,0.02)'">
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#64748b"><span>${escapeHtml(label)}</span><span>${ts}</span></div>
+      <div style="font-size:12px;color:#e2e8f0;margin-top:2px">${escapeHtml((e.content||e.pattern||'').slice(0,140))}</div>
+    </div>`;
+  });
+}
+
+function _renderSemantic(memories) {
+  document.getElementById('memSemanticMemories').innerHTML = _brainRenderList('semantic', memories, (m, i) => `<div onclick="openBrainDetail('semantic',${i})" style="padding:8px 10px;border-radius:8px;background:rgba(52,211,153,0.03);border:1px solid rgba(52,211,153,0.12);cursor:pointer" onmouseover="this.style.background='rgba(52,211,153,0.08)'" onmouseout="this.style.background='rgba(52,211,153,0.03)'">
+    <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(m.name||'—')} <span style="font-size:9px;color:#64748b">[${escapeHtml(m.type||'')}]</span></div>
+    <div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml((m.description||m.content||'').slice(0,120))}</div>
+    <div style="font-size:10px;color:#64748b;margin-top:2px">conf ${(m.confidence||0).toFixed(2)}${m.last_verified?' · verified '+m.last_verified.slice(0,10):''}</div>
+  </div>`);
+}
+
+function _renderEntities(entities) {
+  document.getElementById('memEntities').innerHTML = _brainRenderList('entities', entities, (e, i) => {
+    let det = '';
+    try { const d = JSON.parse(e.details||'{}'); det = Object.values(d).filter(v=>typeof v==='string').slice(0,2).join(' · '); } catch(_){}
+    return `<div onclick="openBrainDetail('entities',${i})" style="padding:8px 10px;border-radius:8px;background:rgba(244,114,182,0.03);border:1px solid rgba(244,114,182,0.12);cursor:pointer" onmouseover="this.style.background='rgba(244,114,182,0.08)'" onmouseout="this.style.background='rgba(244,114,182,0.03)'">
+      <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(e.name)} <span style="font-size:9px;color:#64748b">[${escapeHtml(e.type||'')}]</span></div>
+      ${det?`<div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml(det)}</div>`:''}
+    </div>`;
+  });
+}
+
+// Phase 4 #5: skill list now includes a Promote button (eligibility per ratchet rules)
+function _skillCanPromote(s) {
+  const m = s.maturity || 'draft';
+  const sc = s.success_count || 0, fc = s.failure_count || 0, total = sc + fc;
+  const sr = total ? sc/total : 0;
+  if (m === 'draft' && sc >= 1) return {ok:true, to:'beta', why:`sc=${sc} >= 1`};
+  if (m === 'beta' && sc >= 3 && sr >= 0.66) return {ok:true, to:'stable', why:`sc=${sc} ✓ rate ${(sr*100).toFixed(0)}%`};
+  if (m === 'draft') return {ok:false, why:`needs ≥1 success (have ${sc})`};
+  if (m === 'beta') return {ok:false, why:`needs sc≥3 AND rate≥66% (sc=${sc}, rate=${(sr*100).toFixed(0)}%)`};
+  if (m === 'stable') return {ok:false, why:'already stable'};
+  if (m === 'deprecated') return {ok:false, why:'deprecated — cannot promote'};
+  return {ok:false, why:'n/a'};
+}
+
+function _renderSkillsList(skills) {
+  document.getElementById('memProcedural').innerHTML = _brainRenderList('skills', skills, (s, i) => {
+    const maturityColor = {draft:'#64748b', beta:'#f59e0b', stable:'#22c55e', deprecated:'#ef4444'}[s.maturity||'draft'];
+    const srate = s.success_rate!=null ? Math.round(s.success_rate*100)+'%' : '—';
+    const promo = _skillCanPromote(s);
+    const promoBtn = `<button class="act-btn promote" ${promo.ok?'':'disabled'} title="${escapeHtml(promo.why||'')}" onclick="event.stopPropagation();promoteSkill(${s.id||0},'${promo.to||''}','${escapeHtml(s.name||'').replace(/'/g,"\\'")}')">${promo.ok?'⬆ Promote → '+promo.to:'⬆ ineligible'}</button>`;
+    return `<div onclick="openBrainDetail('skills',${i})" style="padding:8px 10px;border-radius:8px;background:rgba(34,197,94,0.03);border:1px solid rgba(34,197,94,0.12);cursor:pointer" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='rgba(34,197,94,0.03)'">
+      <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(s.name||'—')}</span><span style="font-size:9px;color:${maturityColor};background:${maturityColor}22;padding:2px 6px;border-radius:4px">${s.maturity||'draft'}</span></div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml((s.description||'').slice(0,100))}</div>
+      <div style="font-size:10px;color:#64748b;margin-top:3px">used ${s.times_used||0}x · ✓${s.success_count||0} ✗${s.failure_count||0} · rate ${srate}</div>
+      <div style="margin-top:6px">${promoBtn}</div>
+    </div>`;
+  });
+}
+
 async function _renderBrainMemory() {
   try {
     const [ep, sem, proc] = await Promise.all([
@@ -1764,44 +2006,41 @@ async function _renderBrainMemory() {
       fetch('/memory/semantic?limit=500').then(r => r.json()),
       fetch('/memory/procedural?limit=200').then(r => r.json()),
     ]);
-
-    document.getElementById('memEpisodic').innerHTML = _brainRenderList('episodic', ep.events||[], (e, i) => {
-      const color = e.source === 'conversation' ? '#60a5fa' : '#c084fc';
-      const label = e.role || e.category || e.source || '';
-      const ts = (e.timestamp||'').slice(11,16);
-      return `<div onclick="openBrainDetail('episodic',${i})" style="padding:6px 10px;border-radius:6px;border-left:2px solid ${color};background:rgba(255,255,255,0.02);cursor:pointer" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='rgba(255,255,255,0.02)'">
-        <div style="display:flex;justify-content:space-between;font-size:10px;color:#64748b"><span>${escapeHtml(label)}</span><span>${ts}</span></div>
-        <div style="font-size:12px;color:#e2e8f0;margin-top:2px">${escapeHtml((e.content||e.pattern||'').slice(0,140))}</div>
-      </div>`;
-    });
-
-    document.getElementById('memSemanticMemories').innerHTML = _brainRenderList('semantic', sem.memories||[], (m, i) => `<div onclick="openBrainDetail('semantic',${i})" style="padding:8px 10px;border-radius:8px;background:rgba(52,211,153,0.03);border:1px solid rgba(52,211,153,0.12);cursor:pointer" onmouseover="this.style.background='rgba(52,211,153,0.08)'" onmouseout="this.style.background='rgba(52,211,153,0.03)'">
-      <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(m.name||'—')} <span style="font-size:9px;color:#64748b">[${escapeHtml(m.type||'')}]</span></div>
-      <div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml((m.description||m.content||'').slice(0,120))}</div>
-      <div style="font-size:10px;color:#64748b;margin-top:2px">conf ${(m.confidence||0).toFixed(2)}${m.last_verified?' · verified '+m.last_verified.slice(0,10):''}</div>
-    </div>`);
-
-    document.getElementById('memEntities').innerHTML = _brainRenderList('entities', sem.entities||[], (e, i) => {
-      let det = '';
-      try { const d = JSON.parse(e.details||'{}'); det = Object.values(d).filter(v=>typeof v==='string').slice(0,2).join(' · '); } catch(_){}
-      return `<div onclick="openBrainDetail('entities',${i})" style="padding:8px 10px;border-radius:8px;background:rgba(244,114,182,0.03);border:1px solid rgba(244,114,182,0.12);cursor:pointer" onmouseover="this.style.background='rgba(244,114,182,0.08)'" onmouseout="this.style.background='rgba(244,114,182,0.03)'">
-        <div style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(e.name)} <span style="font-size:9px;color:#64748b">[${escapeHtml(e.type||'')}]</span></div>
-        ${det?`<div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml(det)}</div>`:''}
-      </div>`;
-    });
-
-    document.getElementById('memProcedural').innerHTML = _brainRenderList('skills', proc.skills||[], (s, i) => {
-      const maturityColor = {draft:'#64748b', beta:'#f59e0b', stable:'#22c55e', deprecated:'#ef4444'}[s.maturity||'draft'];
-      const srate = s.success_rate!=null ? Math.round(s.success_rate*100)+'%' : '—';
-      return `<div onclick="openBrainDetail('skills',${i})" style="padding:8px 10px;border-radius:8px;background:rgba(34,197,94,0.03);border:1px solid rgba(34,197,94,0.12);cursor:pointer" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='rgba(34,197,94,0.03)'">
-        <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12px;color:#e2e8f0;font-weight:600">${escapeHtml(s.name||'—')}</span><span style="font-size:9px;color:${maturityColor};background:${maturityColor}22;padding:2px 6px;border-radius:4px">${s.maturity||'draft'}</span></div>
-        <div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml((s.description||'').slice(0,100))}</div>
-        <div style="font-size:10px;color:#64748b;margin-top:3px">used ${s.times_used||0}x · ✓${s.success_count||0} ✗${s.failure_count||0} · rate ${srate}</div>
-      </div>`;
-    });
+    window._brainSubLoaded.episodic = true;
+    window._brainSubLoaded.semantic = true;
+    window._brainSubLoaded.entities = true;
+    window._brainSubLoaded.skills = true;
+    _renderEpisodic(ep.events||[]);
+    _renderSemantic(sem.memories||[]);
+    _renderEntities(sem.entities||[]);
+    _renderSkillsList(proc.skills||[]);
   } catch (e) {
     document.getElementById('memEpisodic').innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`;
   }
+}
+
+// Promote a skill via PATCH /skill/<id>/promote
+async function promoteSkill(skillId, toMaturity, name) {
+  if (!skillId || !toMaturity) return;
+  openConfirm(
+    `Promote skill "${name}" → ${toMaturity}?`,
+    `Esta promoción aplica el ratchet (PATCH /skill/${skillId}/promote).`,
+    async () => {
+      try {
+        const r = await fetch(`/skill/${skillId}/promote`, {
+          method:'PATCH',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({maturity: toMaturity})
+        }).then(r => r.json());
+        if (r.error) throw new Error(r.error);
+        _toast(`✓ skill promoted → ${toMaturity}`, '#22c55e');
+        // Force-refresh memory section
+        window._brainSubLoaded.skills = false;
+        toggleBrainCollapse('skills'); toggleBrainCollapse('skills');
+        _loadBrainSubSection('skills');
+      } catch (e) { alert('Error: '+e.message); }
+    }
+  );
 }
 
 async function _renderBrainSafety() {
@@ -1822,9 +2061,17 @@ async function _renderBrainSafety() {
 
     const sbs = (sand.executions||[]).map(s => {
       const modeColor = {'dry-run':'#64748b','simulation':'#f59e0b','live':'#ef4444'}[s.mode]||'#64748b';
+      // Phase 4 #5b: promote-to-live for dry-run executions
+      let promoteBtn = '';
+      if (s.mode === 'dry-run' && !s.promoted_to_live) {
+        promoteBtn = `<button class="act-btn promote" onclick="promoteSandbox('${escapeHtml(s.execution_id||'')}','${escapeHtml(s.action||'').replace(/'/g,"\\'")}')" style="margin-top:6px">⚡ Promote to live</button>`;
+      } else if (s.promoted_to_live) {
+        promoteBtn = `<span style="font-size:9px;color:#22c55e;background:rgba(34,197,94,0.1);padding:2px 6px;border-radius:4px;margin-top:6px;display:inline-block">✓ promoted</span>`;
+      }
       return `<div style="padding:8px 10px;border-radius:8px;background:${modeColor}0a;border:1px solid ${modeColor}22">
         <div style="display:flex;justify-content:space-between"><span style="font-size:11px;color:#e2e8f0;font-weight:600">${escapeHtml(s.action)}</span><span style="font-size:9px;color:${modeColor};font-weight:700">${s.mode}</span></div>
         <div style="font-size:10px;color:#64748b;margin-top:2px">verdict: ${escapeHtml(s.verdict||'—')} · cost ${(s.predicted_cost||0).toFixed(3)} · ${(s.predicted_time_sec||0).toFixed(1)}s</div>
+        ${promoteBtn}
       </div>`;
     }).join('') || '<div style="color:#64748b;font-size:11px">(sin ejecuciones)</div>';
     document.getElementById('brainSandbox').innerHTML = sbs;
@@ -1842,7 +2089,8 @@ async function _renderBrainLearning() {
       fetch('/reflection/list').then(r=>r.json()).catch(()=>({results:[]})),
       fetch('/worldmodel/active').then(r=>r.json()).catch(()=>({results:[]})),
       fetch('/insight/active').then(r=>r.json()).catch(()=>({results:[]})),
-      fetch('/proposal/pending').then(r=>r.json()).catch(()=>({results:[]})),
+      // Phase 4 #4: fetch ALL proposals (not just pending) so rollback shows for applied ones
+      fetch('/proposal/list?limit=50').then(r=>r.json()).catch(()=>({results:[]})),
       fetch('/keywords').then(r=>r.json()).catch(()=>({results:[]})),
     ]);
     const pr = pref.results || pref || [];
@@ -1887,10 +2135,32 @@ async function _renderBrainLearning() {
       <div style="font-size:10px;color:#c084fc">${(i.confidence!=null?Math.round(i.confidence*100)+'% · ':'')}${escapeHtml(i.type||'')}</div>
     </div>`).join('') : '<div style="color:#64748b;font-size:11px">(ninguno)</div>';
 
-    const propHtml = prop.length ? prop.map(p => `<div style="padding:6px 10px;border-radius:6px;background:rgba(249,115,22,0.05);margin-bottom:4px">
-      <div style="font-size:11px;color:#e2e8f0;font-weight:600">${escapeHtml(p.description||p.title||'—')}</div>
-      ${p.file_path?`<div style="font-family:monospace;font-size:10px;color:#64748b;margin-top:2px">${escapeHtml(p.file_path)}</div>`:''}
-    </div>`).join('') : '<div style="color:#64748b;font-size:11px">(ninguna)</div>';
+    // Phase 4 #4: proposals with apply/reject/rollback buttons + status badges
+    const propHtml = prop.length ? prop.map(p => {
+      const status = p.status || 'pending';
+      const apply = p.apply_status || '';
+      const statusColor = {pending:'#f97316', approved:'#22c55e', rejected:'#ef4444'}[status] || '#94a3b8';
+      const applyBadge = apply ? `<span style="font-size:9px;color:#94a3b8;background:rgba(148,163,184,0.1);padding:1px 6px;border-radius:4px;margin-left:6px">apply: ${escapeHtml(apply)}</span>` : '';
+      let buttons = '';
+      if (status === 'pending') {
+        buttons = `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+          <button class="act-btn apply" onclick="applyProposal(${p.id})">🟢 Apply</button>
+          <button class="act-btn dry" onclick="applyProposal(${p.id}, true)">⚪ Dry</button>
+          <button class="act-btn reject" onclick="rejectProposal(${p.id})">🔴 Reject</button>
+        </div>`;
+      } else if (apply === 'applied') {
+        buttons = `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+          <button class="act-btn rollback" onclick="rollbackProposal(${p.id})">🔄 Rollback</button>
+        </div>`;
+      }
+      return `<div style="padding:8px 10px;border-radius:6px;background:rgba(249,115,22,0.05);margin-bottom:6px;border:1px solid rgba(249,115,22,0.15)">
+        <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:11px;color:#e2e8f0;font-weight:600">${escapeHtml(p.description||p.title||'—')}</span><span style="font-size:9px;color:${statusColor};background:${statusColor}1a;padding:1px 6px;border-radius:4px">${status}${applyBadge?'':''}</span></div>
+        ${applyBadge}
+        ${p.file_path?`<div style="font-family:monospace;font-size:10px;color:#64748b;margin-top:2px">${escapeHtml(p.file_path)}</div>`:''}
+        ${p.apply_error?`<div style="font-size:10px;color:#ef4444;margin-top:2px">err: ${escapeHtml(p.apply_error)}</div>`:''}
+        ${buttons}
+      </div>`;
+    }).join('') : '<div style="color:#64748b;font-size:11px">(ninguna)</div>';
 
     const kwHtml = kwi.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px">${kwi.slice(0,30).map(k => `<span style="font-size:10px;padding:2px 8px;border-radius:999px;background:rgba(56,189,248,0.1);color:#38bdf8;font-family:monospace">${escapeHtml(k.keyword)} <span style="opacity:0.6">(${k.hits||0})</span></span>`).join('')}</div>` : '<div style="color:#64748b;font-size:11px">(ninguna)</div>';
 
@@ -1899,10 +2169,334 @@ async function _renderBrainLearning() {
       section('🟡 Reflections (últimas 5)', '#eab308', reflsHtml) +
       section('🟣 World model — observaciones blandas', '#a855f7', wmHtml) +
       section('💜 Insights', '#c084fc', insHtml) +
-      section('🟠 Proposals pending', '#f97316', propHtml) +
+      section('🟠 Proposals (apply/rollback)', '#f97316', propHtml) +
       section('🔷 Importance keywords', '#38bdf8', kwHtml);
   } catch (e) {
     grid.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Phase 4: Toast notifications + Confirm modal helpers
+// ════════════════════════════════════════════════════════════════════
+function _toast(msg, color) {
+  color = color || '#34d399';
+  const stack = document.getElementById('toastStack');
+  if (!stack) return;
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.style.borderColor = color + '4d';
+  t.style.color = color;
+  t.textContent = msg;
+  stack.appendChild(t);
+  setTimeout(() => { try { t.remove(); } catch(_){} }, 2300);
+}
+
+window._confirmCb = null;
+function openConfirm(title, body, cb) {
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmBody').textContent = body || '';
+  window._confirmCb = cb;
+  document.getElementById('confirmOverlay').style.display = 'block';
+  document.getElementById('confirmModal').style.display = 'block';
+}
+function closeConfirm() {
+  document.getElementById('confirmOverlay').style.display = 'none';
+  document.getElementById('confirmModal').style.display = 'none';
+  window._confirmCb = null;
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const okBtn = document.getElementById('confirmOkBtn');
+  if (okBtn) okBtn.addEventListener('click', () => {
+    const cb = window._confirmCb;
+    closeConfirm();
+    if (cb) try { cb(); } catch(e){ alert('Error: '+e.message); }
+  });
+});
+// Re-bind in case DOMContentLoaded already fired
+setTimeout(() => {
+  const okBtn = document.getElementById('confirmOkBtn');
+  if (okBtn && !okBtn._bound) {
+    okBtn._bound = true;
+    okBtn.addEventListener('click', () => {
+      const cb = window._confirmCb;
+      closeConfirm();
+      if (cb) try { cb(); } catch(e){ alert('Error: '+e.message); }
+    });
+  }
+}, 200);
+
+// ════════════════════════════════════════════════════════════════════
+// Phase 4 #4: Proposal action handlers (Apply / Reject / Rollback)
+// ════════════════════════════════════════════════════════════════════
+async function applyProposal(id, dryRun) {
+  const what = dryRun ? 'Approve dry-run (no se aplica el diff)' : 'Apply diff a archivo';
+  openConfirm(`${what}?`, `POST /proposal/${id}/approve {dry_run:${!!dryRun}}`, async () => {
+    try {
+      const r = await fetch(`/proposal/${id}/approve`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({dry_run: !!dryRun})
+      }).then(r => r.json());
+      const s = r.apply_status || r.status || 'ok';
+      const ok = s === 'applied' || s === 'dry_run' || r.status === 'approved';
+      _toast(ok ? `✓ proposal #${id}: ${s}` : `⚠ ${s}: ${r.apply_error||''}`, ok ? '#22c55e':'#f59e0b');
+      _renderBrainLearning();
+    } catch (e) { alert('Error: '+e.message); }
+  });
+}
+async function rejectProposal(id) {
+  openConfirm(`Rechazar proposal #${id}?`, `POST /proposal/${id}/reject`, async () => {
+    try {
+      await fetch(`/proposal/${id}/reject`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}).then(r=>r.json());
+      _toast(`✗ proposal #${id} rejected`, '#ef4444');
+      _renderBrainLearning();
+    } catch (e) { alert('Error: '+e.message); }
+  });
+}
+async function rollbackProposal(id) {
+  openConfirm(`Rollback proposal #${id}?`, `Restaura el archivo desde el backup. POST /proposal/${id}/rollback`, async () => {
+    try {
+      const r = await fetch(`/proposal/${id}/rollback`, {method:'POST'}).then(r => r.json());
+      if (r.error) throw new Error(r.error);
+      _toast(`🔄 proposal #${id} rolled back`, '#f59e0b');
+      _renderBrainLearning();
+    } catch (e) { alert('Error: '+e.message); }
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Phase 4 #5b: Promote sandbox dry-run to live
+// ════════════════════════════════════════════════════════════════════
+async function promoteSandbox(execId, action) {
+  if (!execId) return;
+  openConfirm(
+    `Promote dry-run "${action||execId}" to live?`,
+    `Marca este execution como ejecutado en vivo. POST /sandbox/${execId}/promote`,
+    async () => {
+      try {
+        const r = await fetch(`/sandbox/${execId}/promote`, {method:'POST'}).then(r => r.json());
+        if (r.error) throw new Error(r.error);
+        _toast(`⚡ sandbox ${execId.slice(0,10)} promoted`, '#34d399');
+        _renderBrainSafety();
+      } catch (e) { alert('Error: '+e.message); }
+    }
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Phase 4 #3: Closed-Loops health panel
+// ════════════════════════════════════════════════════════════════════
+window._loopExpanded = window._loopExpanded || {};
+function toggleLoopRow(key) {
+  window._loopExpanded[key] = !window._loopExpanded[key];
+  const row = document.getElementById('loop-'+key);
+  if (row) row.classList.toggle('expanded', window._loopExpanded[key]);
+}
+
+async function _renderClosedLoops() {
+  const body = document.getElementById('brainLoopsBody');
+  if (!body) return;
+  body.innerHTML = '<div style="color:#64748b;font-size:11px">Cargando loops...</div>';
+  try {
+    const [cal, props, sand, skills, verifs, insights] = await Promise.all([
+      fetch('/calibration/current').then(r => r.json()).catch(()=>({})),
+      fetch('/proposal/list?limit=200').then(r => r.json()).catch(()=>({results:[]})),
+      fetch('/sandbox/list?limit=500').then(r => r.json()).catch(()=>({executions:[]})),
+      fetch('/skill/list?limit=500').then(r => r.json()).catch(()=>({results:[]})),
+      fetch('/verify/list?limit=200').then(r => r.json()).catch(()=>({verifications:[]})),
+      fetch('/insight/list?limit=500').then(r => r.json()).catch(()=>({results:[]})),
+    ]);
+    const proposals = props.results || [];
+    const sandboxes = sand.executions || [];
+    const skList = skills.results || skills || [];
+    const vList = verifs.verifications || [];
+    const iList = insights.results || [];
+
+    // Compute statuses
+    const lastApply = proposals.find(p => (p.apply_status||'').length > 0);
+    const promotedCount = sandboxes.filter(s => s.promoted_to_live).length;
+    const skillsByMaturity = skList.reduce((acc, s) => { const m = s.maturity||'draft'; acc[m]=(acc[m]||0)+1; return acc; }, {});
+    const verifsWithFb = vList.filter(v => v.evidence || v.reason).slice(0, 3);
+    const expiredInsights = iList.filter(i => (i.category||'') === 'expired');
+
+    const loops = [
+      {
+        key:'cal', emoji:'🎯', title:'Calibration loop',
+        status: cal.sufficient ? 'active' : 'warming',
+        summary: `samples=${cal.samples||0} · offset=${(cal.offset||0).toFixed(2)} · window=${cal.window_days||30}d`,
+        active: cal.sufficient,
+        detail: `Adjusts new prediction confidence by offset (raw - offset). Currently ${cal.sufficient?'sufficient':'NOT sufficient'} samples (need ≥10 in window).`,
+      },
+      {
+        key:'apply', emoji:'📋', title:'Proposal apply',
+        status: lastApply ? 'active' : 'idle',
+        summary: lastApply ? `last apply_status: ${lastApply.apply_status} · #${lastApply.id} · ${(lastApply.created_at||'').slice(0,16)}` : 'no apply runs yet',
+        active: !!lastApply,
+        detail: `Most recent: file_path=${(lastApply&&lastApply.file_path)||'—'} · description=${(lastApply&&(lastApply.description||'').slice(0,120))||'—'}`,
+      },
+      {
+        key:'sandbox', emoji:'⚡', title:'Sandbox auto-promote',
+        status: promotedCount > 0 ? 'active' : 'idle',
+        summary: `${promotedCount} executions marked promoted_to_live (de ${sandboxes.length})`,
+        active: promotedCount > 0,
+        detail: `Top promoted actions: ${sandboxes.filter(s=>s.promoted_to_live).slice(0,3).map(s=>s.action).join(', ') || '(ninguno)'}`,
+      },
+      {
+        key:'skill', emoji:'⚙', title:'Skill ratchet',
+        status: 'active',
+        summary: `draft=${skillsByMaturity.draft||0} · beta=${skillsByMaturity.beta||0} · stable=${skillsByMaturity.stable||0} · deprecated=${skillsByMaturity.deprecated||0}`,
+        active: true,
+        detail: `Rules: draft→beta if ≥1 success; beta→stable if ≥3 success AND ≥66% rate; stable→deprecated if failure_rate >50% with ≥5 runs. <button class="act-btn promote" onclick="runSkillRatchet()" style="margin-left:8px">▶ Run ratchet now</button>`,
+      },
+      {
+        key:'verify', emoji:'🔍', title:'Verify feedback',
+        status: vList.length > 0 ? 'active' : 'idle',
+        summary: `${vList.length} verifications recorded · ${verifsWithFb.length} con feedback`,
+        active: vList.length > 0,
+        detail: `Recent w/ feedback: ${verifsWithFb.map(v => `${v.check_type}@${v.subject_type} (${v.passed?'✓':'✗'})`).join(', ') || '(ninguno)'}`,
+      },
+      {
+        key:'expiry', emoji:'⏳', title:'Insight expiry',
+        status: 'active',
+        summary: `${expiredInsights.length} insights expired (de ${iList.length} total)`,
+        active: true,
+        detail: `Expired insights are filtered from /insight/active. Top: ${expiredInsights.slice(0,3).map(i => i.title || (i.content||'').slice(0,60)).join(' · ') || '(ninguno)'}`,
+      },
+    ];
+
+    body.innerHTML = loops.map(l => {
+      const dot = l.active ? '🟢' : '⚪';
+      const statusColor = l.active ? '#34d399' : '#94a3b8';
+      const expanded = window._loopExpanded[l.key] ? 'expanded' : '';
+      return `<div id="loop-${l.key}" class="loop-row ${expanded}" onclick="toggleLoopRow('${l.key}')">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12px;color:#e2e8f0;font-weight:600">${l.emoji} ${l.title} <span style="color:${statusColor};font-size:10px;font-weight:400">${dot} ${l.status}</span></div>
+            <div style="font-size:10px;color:#94a3b8;margin-top:2px;font-family:monospace">${escapeHtml(l.summary)}</div>
+          </div>
+          <span style="font-size:11px;color:#64748b">${window._loopExpanded[l.key]?'▼':'▶'}</span>
+        </div>
+        <div class="loop-detail">${l.detail}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<div style="color:#ef4444;font-size:11px">Error: ${e.message}</div>`;
+  }
+}
+
+async function runSkillRatchet() {
+  try {
+    const r = await fetch('/skill/auto_promote', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}).then(r => r.json());
+    const n = (r.transitions||[]).length;
+    _toast(`⚙ ratchet: ${n} transitions (de ${r.skills_evaluated||0} skills)`, n>0?'#34d399':'#94a3b8');
+    _renderClosedLoops();
+  } catch (e) { alert('Error: '+e.message); }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Phase 4 #8: Live harness writes (polling /harness/activity → toasts)
+// ════════════════════════════════════════════════════════════════════
+window._harnessLive = window._harnessLive || {baseline:null, interval:null};
+async function _startHarnessLiveWatch() {
+  if (window._harnessLive.interval) return;
+  // Establish baseline first
+  try {
+    const r = await fetch('/harness/activity?hours=1').then(r => r.json());
+    window._harnessLive.baseline = {};
+    for (const [t, info] of Object.entries(r.activity||{})) {
+      window._harnessLive.baseline[t] = (info && info.last) || null;
+    }
+  } catch (e) { return; }
+  window._harnessLive.interval = setInterval(async () => {
+    // Stop polling if user left the brain tab
+    if (document.getElementById('brainPanel').style.display !== 'block') {
+      clearInterval(window._harnessLive.interval); window._harnessLive.interval = null; return;
+    }
+    try {
+      const r = await fetch('/harness/activity?hours=1').then(r => r.json());
+      const base = window._harnessLive.baseline || {};
+      for (const [t, info] of Object.entries(r.activity||{})) {
+        const last = info && info.last;
+        if (last && base[t] && last !== base[t]) {
+          _toast(`💾 wrote to ${t}`, '#34d399');
+        }
+        base[t] = last;
+      }
+    } catch (_) { /* silent */ }
+  }, 2500);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Phase 4 #2: Calibration trend chart (SVG line, 30 days)
+// ════════════════════════════════════════════════════════════════════
+async function _renderCalibrationChart() {
+  const el = document.getElementById('calibrationChart');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#64748b;font-size:11px">Cargando calibration trend...</div>';
+  try {
+    const [cur, hist] = await Promise.all([
+      fetch('/calibration/current').then(r => r.json()).catch(()=>({})),
+      fetch('/metric/list?name=calibration_gap&limit=200').then(r => r.json()).catch(()=>({samples:[]})),
+    ]);
+    const samples = (hist.samples || []).slice().reverse(); // ascending
+    // Filter to last 30 days
+    const thirtyDaysAgo = Date.now() - 30*86400000;
+    const recent = samples.filter(s => new Date(s.timestamp).getTime() >= thirtyDaysAgo);
+    // Aggregate by date (one point per day = avg)
+    const byDay = {};
+    recent.forEach(s => {
+      const day = (s.timestamp||'').slice(0,10);
+      if (!byDay[day]) byDay[day] = {sum:0, n:0};
+      byDay[day].sum += s.value; byDay[day].n += 1;
+    });
+    const points = Object.keys(byDay).sort().map(d => ({date:d, value:byDay[d].sum/byDay[d].n}));
+
+    // Indicator color
+    const offset = cur.offset || 0;
+    const absOff = Math.abs(offset);
+    const indColor = absOff > 0.3 ? '#ef4444' : (absOff < 0.1 ? '#22c55e' : '#f59e0b');
+    const indLabel = absOff > 0.3 ? '⚠ over-confident' : (absOff < 0.1 ? '✓ well-calibrated' : '~ off');
+
+    const W = 600, H = 130, padL = 40, padR = 12, padT = 12, padB = 26;
+    const innerW = W - padL - padR, innerH = H - padT - padB;
+    let svgInner = '';
+    if (points.length >= 2) {
+      const minDate = new Date(points[0].date).getTime();
+      const maxDate = new Date(points[points.length-1].date).getTime();
+      const xRange = Math.max(1, maxDate - minDate);
+      const xs = pt => padL + ((new Date(pt.date).getTime() - minDate) / xRange) * innerW;
+      const ys = v => padT + (1 - Math.max(0, Math.min(1, v))) * innerH;
+      // Y-axis lines (0, 0.25, 0.5, 0.75, 1)
+      const grid = [0, 0.25, 0.5, 0.75, 1].map(v => `<line x1="${padL}" x2="${W-padR}" y1="${ys(v)}" y2="${ys(v)}" stroke="rgba(255,255,255,0.05)" stroke-width="1"/><text x="${padL-6}" y="${ys(v)+3}" font-size="9" fill="#64748b" text-anchor="end">${v.toFixed(2)}</text>`).join('');
+      // Path
+      const path = points.map((p,i) => `${i===0?'M':'L'}${xs(p).toFixed(1)} ${ys(p.value).toFixed(1)}`).join(' ');
+      // Dots
+      const dots = points.map(p => `<circle cx="${xs(p).toFixed(1)}" cy="${ys(p.value).toFixed(1)}" r="2.5" fill="#f59e0b"/><title>${p.date}: ${p.value.toFixed(3)}</title>`).join('');
+      // X-axis labels (first, mid, last)
+      const xlabels = [points[0], points[Math.floor(points.length/2)], points[points.length-1]].map(p => `<text x="${xs(p).toFixed(1)}" y="${H-8}" font-size="9" fill="#64748b" text-anchor="middle">${p.date.slice(5)}</text>`).join('');
+      svgInner = grid + `<path d="${path}" fill="none" stroke="#f59e0b" stroke-width="1.5"/>` + dots + xlabels;
+    } else {
+      svgInner = `<text x="${W/2}" y="${H/2}" text-anchor="middle" font-size="11" fill="#64748b">Sin samples suficientes (n=${points.length}). Esperá que el cron metrics genere datos.</text>`;
+    }
+
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:12px;color:#f59e0b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px">📈 Calibration gap (30d)</div>
+          <div style="font-size:10px;color:#64748b;margin-top:2px">una muestra por día (avg). Ideal: tendencia descendente hacia 0.</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:10px;color:#64748b">offset actual</div>
+          <div style="font-size:18px;font-weight:700;color:${indColor};font-family:monospace">${offset>=0?'+':''}${offset.toFixed(3)}</div>
+          <div style="font-size:10px;color:${indColor}">${indLabel} · n=${cur.samples||0}</div>
+        </div>
+      </div>
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;background:rgba(0,0,0,0.15);border-radius:6px">${svgInner}</svg>
+      <div style="font-size:10px;color:#64748b;margin-top:6px">|offset|>0.3 = sobre-confianza (rojo) · <0.1 = bien (verde) · entre = ajuste medio (amarillo). Source: <code style="color:#94a3b8">/calibration/current</code> + <code style="color:#94a3b8">/metric/list?name=calibration_gap</code></div>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div style="color:#ef4444;font-size:11px">Error calibration: ${e.message}</div>`;
   }
 }
 
@@ -2183,6 +2777,8 @@ async function renderExperiments() {
 
 // === Metrics ===
 async function renderMetrics() {
+  // Phase 4 #2: render calibration trend chart alongside metric list
+  _renderCalibrationChart();
   const catEl = document.getElementById('metricsCatalog');
   const el = document.getElementById('metricsList');
   el.innerHTML = '<div style="color:#64748b;font-size:12px">Cargando...</div>';
