@@ -3474,7 +3474,68 @@ def sandbox_execute():
         "promoted_to_live": 1 if data.get("promoted_to_live") else 0,
         "created_at": ts,
     })
-    return jsonify({"status": "recorded", "execution_id": execution_id, "mode": mode})
+    # v2.13: closed-loop sandbox promotion check.
+    # If this is a dry-run with verdict=ok and the previous N (default 3)
+    # dry-runs of the same action all had verdict=ok → caller can safely
+    # graduate to mode='live' next time. Returned as `auto_promotable`.
+    auto_promotable = False
+    promote_n = 3
+    if mode == "dry-run" and data.get("verdict") == "ok":
+        prev = db.execute(
+            "SELECT verdict FROM sandbox_executions "
+            "WHERE action = ? AND mode = 'dry-run' "
+            "ORDER BY created_at DESC LIMIT ?",
+            [action, promote_n]).fetchall()
+        # Note: includes the row we just inserted, so all `promote_n` must be 'ok'.
+        if len(prev) >= promote_n and all(r[0] == "ok" for r in prev):
+            auto_promotable = True
+    return jsonify({
+        "status": "recorded",
+        "execution_id": execution_id,
+        "mode": mode,
+        "auto_promotable": auto_promotable,
+        "promote_threshold": promote_n,
+    })
+
+
+@app.route("/sandbox/<execution_id>/promote", methods=["POST"])
+def sandbox_promote(execution_id):
+    """Mark a dry-run execution as promoted_to_live=1. Use after the caller
+    has actually executed the live action."""
+    db = get_db()
+    row = db.execute(
+        "SELECT id, mode FROM sandbox_executions WHERE execution_id = ?",
+        [execution_id]).fetchone()
+    if not row:
+        return jsonify({"error": "execution_id not found"}), 404
+    db.execute(
+        "UPDATE sandbox_executions SET promoted_to_live = 1 WHERE execution_id = ?",
+        [execution_id])
+    return jsonify({"status": "promoted", "execution_id": execution_id})
+
+
+@app.route("/sandbox/can_live", methods=["GET"])
+def sandbox_can_live():
+    """Returns whether an action has accumulated enough successful dry-runs to
+    be safely promoted to live mode. Query: ?action=<action>&n=<threshold>"""
+    db = get_db()
+    action = (request.args.get("action") or "").strip()
+    n = safe_int(request.args.get("n"), default=3, min_val=1, max_val=20)
+    if not action:
+        return jsonify({"error": "action required"}), 400
+    rows = db.execute(
+        "SELECT verdict FROM sandbox_executions "
+        "WHERE action = ? AND mode = 'dry-run' "
+        "ORDER BY created_at DESC LIMIT ?",
+        [action, n]).fetchall()
+    can = len(rows) >= n and all(r[0] == "ok" for r in rows)
+    return jsonify({
+        "can_live": can,
+        "action": action,
+        "threshold": n,
+        "samples": len(rows),
+        "verdicts": [r[0] for r in rows],
+    })
 
 
 @app.route("/sandbox/list", methods=["GET"])
