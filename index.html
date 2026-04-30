@@ -259,6 +259,11 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
       <span id="codexUsageSub">Sin datos — tocá <b>Actualizar</b> para consultar</span>
     </div>
     <div id="codexUsageBody"></div>
+    <div class="usage-section-title" style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.7px;margin:18px 0 6px">ElevenLabs</div>
+    <div class="usage-sub">
+      <span id="elevenUsageSub">Sin datos — tocá <b>Actualizar</b> para consultar</span>
+    </div>
+    <div id="elevenUsageBody"></div>
     <div class="usage-actions">
       <button class="usage-btn-refresh" id="usageRefresh">Actualizar</button>
       <button class="usage-btn-close" id="usageClose">Cerrar</button>
@@ -2919,9 +2924,9 @@ if (['logs','graph','arch','rag','brain','crons'].includes(hashTab)) switchTab(h
     }
   }
 
-  btnOpen.onclick = () => { overlay.classList.add('open'); loadCached(); loadCodexCached(); };
+  btnOpen.onclick = () => { overlay.classList.add('open'); loadCached(); loadCodexCached(); loadElevenCached(); };
   btnClose.onclick = () => overlay.classList.remove('open');
-  btnRefresh.onclick = () => { refresh(); refreshCodex(); };
+  btnRefresh.onclick = () => { refresh(); refreshCodex(); refreshEleven(); };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
 
   // ─── Codex usage (same modal, separate section) ─────────────
@@ -3004,6 +3009,83 @@ if (['logs','graph','arch','rag','brain','crons'].includes(hashTab)) switchTab(h
       pollCodexUntilDone();
     } catch (e) {
       codexSub.textContent = 'Error: ' + e.message;
+    }
+  }
+
+  // ─── ElevenLabs usage (REST API directa) ─────────────────────
+  const elevenBody = $('elevenUsageBody');
+  const elevenSub = $('elevenUsageSub');
+  let elevenPollTimer = null;
+
+  function fmtNumber(n) {
+    return Number(n || 0).toLocaleString('es-UY');
+  }
+
+  function renderEleven(data) {
+    if (!data) {
+      elevenBody.innerHTML = '<div class="usage-empty">Sin datos. Tocá <b>Actualizar</b> para consultar.</div>';
+      return;
+    }
+    const pct = data.pct_used || 0;
+    const meta = `<span><b>Tier:</b> ${escapeHtml(data.tier)}</span><span><b>Usado:</b> ${fmtNumber(data.characters_used)} / ${fmtNumber(data.characters_limit)} chars</span><span><b>Restante:</b> ${fmtNumber(data.characters_remaining)}</span>`;
+    const resets = data.reset_at ? new Date(data.reset_at).toLocaleString('es-UY', {day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}) : null;
+    elevenBody.innerHTML = renderRow('Caracteres mensuales', pct, resets, meta);
+  }
+
+  async function loadElevenCached() {
+    try {
+      const res = await fetch('/usage/elevenlabs');
+      const j = await res.json();
+      if (j.fetching) {
+        elevenSub.innerHTML = '<span style="color:#fbbf24">⏳ Actualizando...</span>';
+        pollElevenUntilDone();
+      } else if (j.fetched_at) {
+        const r = j.result || {};
+        if (r.error) {
+          elevenSub.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b> · <span style="color:#ef4444">error: ${escapeHtml(r.error)}</span>`;
+          elevenBody.innerHTML = '<div class="usage-empty">Error al consultar la API. Tocá <b>Actualizar</b> para reintentar.</div>';
+        } else {
+          elevenSub.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b>`;
+          renderEleven(r.data);
+        }
+      }
+    } catch (e) {
+      elevenSub.textContent = 'Error de red: ' + e.message;
+    }
+  }
+
+  function pollElevenUntilDone() {
+    clearTimeout(elevenPollTimer);
+    elevenPollTimer = setTimeout(async () => {
+      try {
+        const res = await fetch('/usage/elevenlabs');
+        const j = await res.json();
+        if (j.fetching) {
+          pollElevenUntilDone();
+        } else if (j.fetched_at) {
+          const r = j.result || {};
+          if (r.error) {
+            elevenSub.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b> · <span style="color:#ef4444">error: ${escapeHtml(r.error)}</span>`;
+            elevenBody.innerHTML = '<div class="usage-empty">Error al consultar la API. Tocá <b>Actualizar</b> para reintentar.</div>';
+          } else {
+            elevenSub.innerHTML = `Última actualización: <b>${fmtDate(j.fetched_at)}</b>`;
+            renderEleven(r.data);
+          }
+        }
+      } catch (e) {
+        elevenSub.textContent = 'Error: ' + e.message;
+      }
+    }, 1500);
+  }
+
+  async function refreshEleven() {
+    elevenBody.innerHTML = '<div class="usage-loading"><div class="spinner"></div>Consultando ElevenLabs API...</div>';
+    elevenSub.innerHTML = '<span style="color:#fbbf24">⏳ Fetching subscription...</span>';
+    try {
+      await fetch('/usage/elevenlabs/refresh', { method: 'POST' });
+      pollElevenUntilDone();
+    } catch (e) {
+      elevenSub.textContent = 'Error: ' + e.message;
     }
   }
 })();

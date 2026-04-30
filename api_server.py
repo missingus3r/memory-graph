@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.13.0"
+VERSION = "2.14.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -4437,6 +4437,89 @@ def usage_codex_refresh():
             "result": _CODEX_USAGE_CACHE["data"],
         })
     t = threading.Thread(target=_fetch_codex_usage_background, daemon=True)
+    t.start()
+    return jsonify({"started": True, "fetching": True})
+
+
+# ───────────────────────────────────────────────────────────────
+# ElevenLabs usage dashboard
+# Plain REST call to /v1/user/subscription with xi-api-key.
+# ───────────────────────────────────────────────────────────────
+_ELEVEN_USAGE_CACHE = {"data": None, "fetched_at": None, "fetching": False}
+_ELEVEN_USAGE_LOCK = threading.Lock()
+
+
+def _fetch_elevenlabs_usage():
+    api_key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if not api_key:
+        return {"error": "ELEVENLABS_API_KEY not configured"}
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            "https://api.elevenlabs.io/v1/user/subscription",
+            headers={"xi-api-key": api_key, "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return {"error": f"fetch failed: {e}"}
+
+    tier = payload.get("tier", "N/A")
+    limit = int(payload.get("character_limit", 0) or 0)
+    used = int(payload.get("character_count", 0) or 0)
+    reset_unix = payload.get("next_character_count_reset_unix", 0) or 0
+    remaining = max(0, limit - used)
+    pct = round((used * 100 / limit), 1) if limit > 0 else 0.0
+    reset_iso = ""
+    try:
+        if reset_unix:
+            reset_iso = datetime.datetime.fromtimestamp(int(reset_unix), tz=datetime.timezone.utc).isoformat()
+    except Exception:
+        reset_iso = ""
+
+    return {"ok": True, "data": {
+        "tier": tier,
+        "characters_used": used,
+        "characters_limit": limit,
+        "characters_remaining": remaining,
+        "pct_used": pct,
+        "reset_at": reset_iso,
+    }}
+
+
+def _fetch_elevenlabs_background():
+    with _ELEVEN_USAGE_LOCK:
+        if _ELEVEN_USAGE_CACHE["fetching"]:
+            return
+        _ELEVEN_USAGE_CACHE["fetching"] = True
+    try:
+        result = _fetch_elevenlabs_usage()
+        _ELEVEN_USAGE_CACHE["data"] = result
+        _ELEVEN_USAGE_CACHE["fetched_at"] = now_iso()
+    finally:
+        _ELEVEN_USAGE_CACHE["fetching"] = False
+
+
+@app.route("/usage/elevenlabs", methods=["GET"])
+def usage_elevenlabs_get():
+    return jsonify({
+        "fetched_at": _ELEVEN_USAGE_CACHE["fetched_at"],
+        "fetching": _ELEVEN_USAGE_CACHE["fetching"],
+        "result": _ELEVEN_USAGE_CACHE["data"],
+    })
+
+
+@app.route("/usage/elevenlabs/refresh", methods=["POST"])
+def usage_elevenlabs_refresh():
+    sync = request.args.get("sync") in ("1", "true")
+    if sync:
+        _fetch_elevenlabs_background()
+        return jsonify({
+            "fetched_at": _ELEVEN_USAGE_CACHE["fetched_at"],
+            "fetching": _ELEVEN_USAGE_CACHE["fetching"],
+            "result": _ELEVEN_USAGE_CACHE["data"],
+        })
+    t = threading.Thread(target=_fetch_elevenlabs_background, daemon=True)
     t.start()
     return jsonify({"started": True, "fetching": True})
 
