@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.14.0"
+VERSION = "2.14.1"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -3355,6 +3355,23 @@ def wm_prediction_create():
     outcome = (data.get("predicted_outcome") or "").strip()
     if not hypothesis or not outcome:
         return jsonify({"error": "hypothesis and predicted_outcome required"}), 400
+    due_at = (data.get("due_at") or "").strip()
+    if due_at:
+        try:
+            datetime.datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return jsonify({
+                "error": f"due_at must be ISO 8601 (e.g. 2026-05-01T12:00:00Z), got: {due_at!r}",
+                "hint": "use $(date -u -d '+12 hours' +%Y-%m-%dT%H:%M:%SZ)"
+            }), 400
+    dup = db.execute(
+        "SELECT id FROM wm_predictions WHERE hypothesis = ? AND resolved = 0 LIMIT 1",
+        [hypothesis]).fetchone()
+    if dup:
+        return jsonify({
+            "error": "duplicate hypothesis — an unresolved prediction with identical hypothesis already exists",
+            "duplicate_of": dup[0]
+        }), 409
     raw = clamp_float(data.get("confidence", 0.5), default=0.5)
     cal = _compute_calibration_offset(db)
     adjusted = max(0.05, min(0.95, raw - cal["offset"])) if cal["sufficient"] else raw
@@ -3367,7 +3384,7 @@ def wm_prediction_create():
         "confidence": adjusted,           # the forecast actually used (calibrated)
         "confidence_raw": raw,            # user-supplied original
         "confidence_adjusted": adjusted,  # mirror for analytics
-        "due_at": data.get("due_at", ""),
+        "due_at": due_at,
         "resolved": 0,
         "actual_outcome": "",
         "resolved_at": "",
