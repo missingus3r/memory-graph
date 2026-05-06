@@ -38,6 +38,13 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
 .log-channel{color:#f472b6;font-size:10px}
 .log-content{color:#94a3b8;line-height:1.6;word-break:break-word;font-size:13px}
 .log-search-info{padding:8px 12px;font-size:11px;color:#475569;border-bottom:1px solid rgba(255,255,255,0.06);margin-bottom:4px}
+.log-search-bar{position:sticky;top:0;z-index:20;background:rgba(15,23,42,0.95);backdrop-filter:blur(8px);padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;gap:8px;align-items:center}
+.log-search-bar input{flex:1;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);color:#e2e8f0;padding:6px 10px;font-size:12px;border-radius:6px;font-family:inherit;outline:none}
+.log-search-bar input:focus{border-color:#ff6b6b;background:rgba(255,107,107,0.05)}
+.log-search-bar .clear-btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#94a3b8;padding:5px 9px;font-size:11px;border-radius:6px;cursor:pointer}
+.log-search-bar .clear-btn:hover{color:#ef4444;border-color:rgba(239,68,68,0.3)}
+.log-search-bar .hint{font-size:10px;color:#475569;white-space:nowrap}
+.log-content mark{background:rgba(251,191,36,0.35);color:#fbbf24;border-radius:2px;padding:0 2px}
 .log-date-header{padding:10px 12px;font-size:12px;font-weight:700;color:#ff6b6b;background:rgba(255,107,107,0.05);border-bottom:1px solid rgba(255,255,255,0.06);position:sticky;top:0;z-index:10;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none}
 .log-date-header:hover{background:rgba(255,107,107,0.1)}
 .log-date-header .arrow{transition:transform 0.2s;font-size:10px}
@@ -998,16 +1005,32 @@ function toggleCollapse(el, date) {
   localStorage.setItem('logCollapsed', JSON.stringify(states));
 }
 
+// Local search term for the Logs tab (independent from the global topbar search)
+let logsSearchTerm = '';
+function escHtml(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function highlightMatches(text, term) {
+  if (!term) return escHtml(text);
+  const safeText = escHtml(text);
+  try {
+    const re = new RegExp(escRegex(term), 'gi');
+    return safeText.replace(re, m => '<mark>' + m + '</mark>');
+  } catch (e) {
+    return safeText;
+  }
+}
+
 function renderLogs() {
   const panel = document.getElementById('logsPanel');
-  const searchTerm = document.getElementById('search').value.toLowerCase();
+  const globalTerm = document.getElementById('search').value.toLowerCase();
+  const localTerm = logsSearchTerm.toLowerCase();
+  const term = localTerm || globalTerm;
 
   let filtered = logsData;
-  if (searchTerm) {
-    filtered = filtered.filter(c => (c.content||'').toLowerCase().includes(searchTerm) || (c.role||'').includes(searchTerm) || (c.channel||'').includes(searchTerm));
+  if (term) {
+    filtered = filtered.filter(c => (c.content||'').toLowerCase().includes(term) || (c.role||'').includes(term) || (c.channel||'').includes(term));
   }
 
-  // Group by date
   const groups = {};
   filtered.forEach(c => {
     const date = new Date(c.timestamp).toLocaleDateString('es-UY', {weekday:'long', year:'numeric', month:'long', day:'numeric'});
@@ -1015,7 +1038,11 @@ function renderLogs() {
     groups[date].push(c);
   });
 
-  let html = `<div class="log-search-info">${filtered.length} logs encontrados</div>`;
+  let html = `<div class="log-search-bar">
+    <input type="text" id="logsSearchInput" placeholder="Buscar en logs (atajo: /)..." value="${escHtml(logsSearchTerm)}">
+    <button class="clear-btn" id="logsSearchClear" title="Limpiar (Esc)">✕</button>
+    <span class="hint">${filtered.length} match · ${Object.keys(groups).length} día(s)</span>
+  </div>`;
 
   Object.entries(groups).forEach(([date, entries]) => {
     const isCollapsed = getCollapsedState(date);
@@ -1023,25 +1050,46 @@ function renderLogs() {
     html += `<div class="log-date-header${isCollapsed?' collapsed':''}" onclick="toggleCollapse(this,'${date.replace(/'/g,'')}')"><span>${date} (${entries.length})</span><span class="arrow">▼</span></div>`;
     entries.forEach(c => {
       const time = new Date(c.timestamp).toLocaleTimeString('es-UY', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      const content = highlightMatches(c.content || '', logsSearchTerm);
       html += `<div class="log-entry">
         <div class="log-meta">
           <span class="log-time">${time}</span>
           <span class="log-role ${c.role}">${c.role}</span>
           <span class="log-channel">${c.channel || ''}</span>
         </div>
-        <div class="log-content">${(c.content||'').replace(/</g,'&lt;')}</div>
+        <div class="log-content">${content}</div>
       </div>`;
     });
     html += `</div>`;
   });
 
   panel.innerHTML = html;
+
+  const inp = document.getElementById('logsSearchInput');
+  const clr = document.getElementById('logsSearchClear');
+  if (inp) {
+    inp.addEventListener('input', e => { logsSearchTerm = e.target.value; renderLogs(); setTimeout(() => { const i = document.getElementById('logsSearchInput'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 0); });
+    inp.addEventListener('keydown', e => { if (e.key === 'Escape') { logsSearchTerm = ''; renderLogs(); } });
+  }
+  if (clr) clr.addEventListener('click', () => { logsSearchTerm = ''; renderLogs(); });
 }
 
 // Update search to also filter logs
 document.getElementById('search').addEventListener('input', () => {
   if (currentTab === 'graph') updateGraph();
   else renderLogs();
+});
+
+// Keyboard shortcut: "/" focuses the logs search when on logs tab
+document.addEventListener('keydown', e => {
+  if (currentTab !== 'logs') return;
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (e.key === '/') {
+    e.preventDefault();
+    const i = document.getElementById('logsSearchInput');
+    if (i) { i.focus(); i.select(); }
+  }
 });
 
 // === Architecture View ===
