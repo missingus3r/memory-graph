@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.14.1"
+VERSION = "2.15.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -1176,6 +1176,38 @@ def stats():
         "entities": ent_count,
         "db_size_mb": round(db_size / 1024 / 1024, 2),
         "db_path": DB_PATH,
+    })
+
+
+@app.route("/tab/counts")
+def tab_counts():
+    """Aggregated counts for the dashboard tab badges."""
+    db = get_db()
+    def safe_count(sql):
+        try:
+            return db.execute(sql).fetchone()[0]
+        except Exception:
+            return 0
+    graph = safe_count("SELECT COUNT(*) FROM memories") + safe_count("SELECT COUNT(*) FROM entities")
+    logs = safe_count("SELECT COUNT(*) FROM conversations")
+    rag = safe_count("SELECT COUNT(*) FROM embeddings")
+    brain = (
+        safe_count("SELECT COUNT(*) FROM world_model")
+        + safe_count("SELECT COUNT(*) FROM reflections")
+        + safe_count("SELECT COUNT(*) FROM insights")
+        + safe_count("SELECT COUNT(*) FROM skills")
+        + safe_count("SELECT COUNT(*) FROM preferences")
+        + safe_count("SELECT COUNT(*) FROM proposals")
+        + safe_count("SELECT COUNT(*) FROM goals")
+        + safe_count("SELECT COUNT(*) FROM capabilities")
+    )
+    crons = safe_count("SELECT COUNT(*) FROM active_crons")
+    return jsonify({
+        "graph": graph,
+        "logs": logs,
+        "rag": rag,
+        "brain": brain,
+        "crons": crons,
     })
 
 
