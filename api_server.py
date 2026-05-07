@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.15.0"
+VERSION = "2.16.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -1202,12 +1202,14 @@ def tab_counts():
         + safe_count("SELECT COUNT(*) FROM capabilities")
     )
     crons = safe_count("SELECT COUNT(*) FROM active_crons")
+    skills = safe_count("SELECT COUNT(*) FROM skills")
     return jsonify({
         "graph": graph,
         "logs": logs,
         "rag": rag,
         "brain": brain,
         "crons": crons,
+        "skills": skills,
     })
 
 

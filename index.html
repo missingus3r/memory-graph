@@ -209,6 +209,7 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <button class="tab-btn" data-tab="arch">Arch</button>
     <button class="tab-btn" data-tab="rag">RAG<span class="tab-count" id="tc-rag"></span></button>
     <button class="tab-btn" data-tab="brain">Brain<span class="tab-count" id="tc-brain"></span></button>
+    <button class="tab-btn" data-tab="skills">Skills<span class="tab-count" id="tc-skills"></span></button>
     <button class="tab-btn" data-tab="crons">Crons<span class="tab-count" id="tc-crons"></span></button>
   </div>
   <button class="usage-btn" id="usageBtn" title="Consumo de Claude Code">$ Usage</button>
@@ -361,6 +362,7 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     </div>
   </div>
 </div>
+<div id="skillsPanel" style="display:none;position:fixed;top:var(--topbar-h);left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px"></div>
 <div id="brainPanel" style="display:none;position:fixed;top:var(--topbar-h);left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f">
   <div style="position:sticky;top:0;z-index:5;background:rgba(10,10,15,0.95);backdrop-filter:blur(10px);border-bottom:1px solid rgba(255,255,255,0.06);padding:12px 20px">
     <div style="max-width:1200px;margin:0 auto;display:flex;gap:6px;flex-wrap:wrap" id="brainSubNav"></div>
@@ -942,13 +944,15 @@ function switchTab(tab) {
   document.getElementById('archPanel').style.display = tab === 'arch' ? 'block' : 'none';
   document.getElementById('ragPanel').style.display = tab === 'rag' ? 'block' : 'none';
   document.getElementById('brainPanel').style.display = tab === 'brain' ? 'block' : 'none';
+  document.getElementById('skillsPanel').style.display = tab === 'skills' ? 'block' : 'none';
   document.getElementById('cronsPanel').style.display = tab === 'crons' ? 'block' : 'none';
-  document.body.style.overflow = (['logs','rag','brain','crons'].includes(tab)) ? 'auto' : 'hidden';
+  document.body.style.overflow = (['logs','rag','brain','skills','crons'].includes(tab)) ? 'auto' : 'hidden';
 
   document.querySelector('.filters').style.display = tab === 'graph' ? 'flex' : 'none';
   document.querySelector('.legend').style.display = tab === 'graph' ? 'flex' : 'none';
 
   if (tab === 'logs') renderLogs();
+  if (tab === 'skills') renderSkills();
   if (tab === 'arch') renderArch();
   if (tab === 'rag') loadRagDashboard();
   if (tab === 'brain') renderBrain();
@@ -962,7 +966,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // Restore tab from hash (deferred to ensure all data is defined)
 window.addEventListener('hashchange', () => {
   const h = location.hash.replace('#','');
-  if (['logs','graph','arch','rag','brain','crons'].includes(h)) switchTab(h);
+  if (['logs','graph','arch','rag','brain','skills','crons'].includes(h)) switchTab(h);
 });
 
 // === Tab counts (single fetch to /tab/counts, refreshes every 60s) ===
@@ -985,6 +989,7 @@ async function loadTabCounts() {
     setCount('tc-logs', c.logs);
     setCount('tc-rag', c.rag);
     setCount('tc-brain', c.brain);
+    setCount('tc-skills', c.skills);
     setCount('tc-crons', c.crons);
   } catch (e) { /* silent */ }
 }
@@ -1091,6 +1096,54 @@ document.addEventListener('keydown', e => {
     if (i) { i.focus(); i.select(); }
   }
 });
+
+// === Skills View ===
+async function renderSkills() {
+  const panel = document.getElementById('skillsPanel');
+  panel.innerHTML = '<div style="color:#94a3b8;padding:20px">Cargando skills...</div>';
+  let data = null;
+  try {
+    const r = await fetch(API + '/skill/list');
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) { panel.innerHTML = '<div style="color:#ef4444;padding:20px">Error cargando skills.</div>'; return; }
+  const skills = (data.results || []).slice().sort((a,b) => {
+    const order = {stable:0, beta:1, draft:2, deprecated:3};
+    return (order[a.maturity]||9) - (order[b.maturity]||9) || (b.times_used||0) - (a.times_used||0);
+  });
+  const matCol = m => ({stable:'#22c55e', beta:'#fbbf24', draft:'#94a3b8', deprecated:'#64748b'}[m]||'#94a3b8');
+  const fmt = n => n == null ? '–' : n;
+  const fmtDate = d => d ? new Date(d).toLocaleDateString('es-UY',{day:'2-digit',month:'short',year:'numeric'}) : 'nunca';
+  const total = skills.length;
+  const byMat = skills.reduce((a,s)=>{a[s.maturity]=(a[s.maturity]||0)+1;return a},{});
+  let html = `<div style="max-width:1200px;margin:0 auto">
+    <div style="margin-bottom:20px">
+      <h2 style="color:#e2e8f0;font-size:18px;margin:0 0 6px;font-weight:600">Skills</h2>
+      <div style="color:#64748b;font-size:12px">${total} skills · stable ${byMat.stable||0} · beta ${byMat.beta||0} · draft ${byMat.draft||0} · deprecated ${byMat.deprecated||0}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">`;
+  skills.forEach(s => {
+    const sc = s.success_count || 0, fc = s.failure_count || 0, used = s.times_used || (sc+fc);
+    const total = sc + fc;
+    const rate = total > 0 ? Math.round(sc/total*100) : null;
+    const rateLabel = rate == null ? '<span style="color:#475569">sin runs</span>' : `<span style="color:${rate>=66?'#22c55e':rate>=40?'#fbbf24':'#ef4444'}">${rate}% ok (${sc}/${total})</span>`;
+    html += `<div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px">
+        <div style="font-weight:600;color:#e2e8f0;font-size:13px;flex:1">${(s.name||'?').replace(/</g,'&lt;')}</div>
+        <span style="background:${matCol(s.maturity)}22;color:${matCol(s.maturity)};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:0.5px">${(s.maturity||'?').toUpperCase()}</span>
+      </div>
+      <div style="color:#94a3b8;font-size:11px;line-height:1.5;margin-bottom:8px;min-height:32px">${(s.description||'').replace(/</g,'&lt;') || '<i style=\"color:#475569\">sin descripción</i>'}</div>
+      <div style="font-size:10px;color:#64748b;display:flex;flex-direction:column;gap:3px">
+        <div>📊 ${rateLabel} · ${fmt(used)} usos</div>
+        <div>⏱️ avg ${fmt(s.time_avg_sec ? s.time_avg_sec.toFixed(1) + 's' : '–')} · 💰 $${fmt(s.cost_avg)}</div>
+        <div>👁️ último uso: ${fmtDate(s.last_used)}</div>
+        <div style="color:#475569;font-style:italic;margin-top:4px">trigger: <code style="background:rgba(255,255,255,0.04);padding:1px 4px;border-radius:3px">${(s.trigger_pattern||'–').replace(/</g,'&lt;')}</code></div>
+      </div>
+    </div>`;
+  });
+  html += `</div></div>`;
+  panel.innerHTML = html;
+}
 
 // === Architecture View ===
 var ARCH_NODES = [
@@ -2862,7 +2915,7 @@ async function renderMetrics() {
 
 // Restore tab from hash (after all data is defined)
 const hashTab = location.hash.replace('#','');
-if (['logs','graph','arch','rag','brain','crons'].includes(hashTab)) switchTab(hashTab);
+if (['logs','graph','arch','rag','brain','skills','crons'].includes(hashTab)) switchTab(hashTab);
 </script>
 <script>
 // ─── Claude Code Usage dashboard ────────────────────────────────
