@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.16.0"
+VERSION = "2.17.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -1537,6 +1537,17 @@ def graph():
     if graph_path.exists():
         return send_file(str(graph_path))
     return jsonify({"error": "Graph not found"}), 404
+
+
+@app.route("/graph3d")
+def graph3d_preview():
+    """Standalone 3D preview (Three.js + 3d-force-graph). Temporal — preview only."""
+    if GRAPH_PASSWORD and not _graph_auth_ok():
+        return redirect("/login?next=/graph3d")
+    p = Path.home() / "proyectos" / "memory-graph" / "graph-3d-preview.html"
+    if p.exists():
+        return send_file(str(p))
+    return jsonify({"error": "3D preview not found"}), 404
 
 
 @app.route("/kv/<key>", methods=["GET", "PUT"])

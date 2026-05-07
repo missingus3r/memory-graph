@@ -320,6 +320,17 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
 </div>
 
 <svg id="graph" class="tab-view active"></svg>
+<div id="graph3d" class="tab-view" style="background:#000010"></div>
+<div id="graphModeToggle" style="position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:100;background:rgba(0,0,0,0.65);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.1);padding:5px;border-radius:24px;display:none;gap:0">
+  <button id="graphMode2D" class="active" style="background:rgba(255,107,107,0.2);border:none;color:#ff6b6b;padding:6px 16px;font-size:11px;font-weight:600;cursor:pointer;border-radius:18px;font-family:inherit;letter-spacing:0.3px">2D</button>
+  <button id="graphMode3D" style="background:transparent;border:none;color:#94a3b8;padding:6px 16px;font-size:11px;font-weight:600;cursor:pointer;border-radius:18px;font-family:inherit;letter-spacing:0.3px">3D</button>
+</div>
+<div id="graph3dControls" style="position:fixed;bottom:14px;right:16px;z-index:100;background:rgba(0,0,0,0.65);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.1);padding:8px 12px;border-radius:8px;font-size:10px;color:#64748b;display:none;gap:8px;align-items:center">
+  drag·orbit · scroll·zoom
+  <button id="g3dBtnRotate" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#e2e8f0;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-family:inherit">⟳ auto-orbit</button>
+  <button id="g3dBtnLabels" class="active" style="background:rgba(255,107,107,0.2);border:1px solid #ff6b6b;color:#ff6b6b;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-family:inherit">aa labels</button>
+  <button id="g3dBtnBloom" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#e2e8f0;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-family:inherit">✦ bloom</button>
+</div>
 <div id="logsPanel" class="tab-view"></div>
 <div id="archPanel" class="tab-view"></div>
 <div id="ragPanel" class="tab-view" style="position:fixed;top:var(--topbar-h);left:0;right:0;bottom:0;overflow-y:auto;padding:16px">
@@ -939,13 +950,20 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
 
-  document.getElementById('graph').style.display = tab === 'graph' ? 'block' : 'none';
+  // 2D / 3D depend on user toggle within the graph tab
+  const onGraphTab = (tab === 'graph');
+  const showing3d = onGraphTab && (window._graphMode === '3d');
+  document.getElementById('graph').style.display = (onGraphTab && !showing3d) ? 'block' : 'none';
+  document.getElementById('graph3d').style.display = showing3d ? 'block' : 'none';
+  document.getElementById('graphModeToggle').style.display = onGraphTab ? 'flex' : 'none';
+  document.getElementById('graph3dControls').style.display = showing3d ? 'flex' : 'none';
   document.getElementById('logsPanel').style.display = tab === 'logs' ? 'block' : 'none';
   document.getElementById('archPanel').style.display = tab === 'arch' ? 'block' : 'none';
   document.getElementById('ragPanel').style.display = tab === 'rag' ? 'block' : 'none';
   document.getElementById('brainPanel').style.display = tab === 'brain' ? 'block' : 'none';
   document.getElementById('skillsPanel').style.display = tab === 'skills' ? 'block' : 'none';
   document.getElementById('cronsPanel').style.display = tab === 'crons' ? 'block' : 'none';
+  if (showing3d) window._initGraph3DLazy && window._initGraph3DLazy();
   document.body.style.overflow = (['logs','rag','brain','skills','crons'].includes(tab)) ? 'auto' : 'hidden';
 
   document.querySelector('.filters').style.display = tab === 'graph' ? 'flex' : 'none';
@@ -3304,6 +3322,228 @@ if (['logs','graph','arch','rag','brain','skills','crons'].includes(hashTab)) sw
   btnRefresh.onclick = loadInfo;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
 })();
+</script>
+<!-- ===== 3D Graph (lazy-loaded module) ===== -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.183.2/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.2/examples/jsm/",
+    "3d-force-graph": "https://cdn.jsdelivr.net/npm/3d-force-graph@1.80.0/+esm",
+    "three-spritetext": "https://cdn.jsdelivr.net/npm/three-spritetext@1.8.2/+esm"
+  }
+}
+</script>
+<style>
+  #graph3dControls button.active{background:rgba(255,107,107,0.2)!important;border-color:#ff6b6b!important;color:#ff6b6b!important}
+  #graph3d sprite-text{pointer-events:none}
+</style>
+<script type="module">
+import * as THREE from 'three';
+import ForceGraph3D from '3d-force-graph';
+import SpriteText from 'three-spritetext';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+const G3D_API = window.location.origin;
+const G3D_COLORS = {
+  memory: '#c084fc', wm_entity: '#34d399', skill: '#22c55e',
+  worldmodel: '#fbbf24', preference: '#22d3ee', insight: '#a855f7', reflection: '#eab308'
+};
+
+async function loadG3DData() {
+  const safe = p => p.then(r => r.ok ? r.json() : null).catch(() => null);
+  const [mem, wmEnt, skill, wm, pref, ins, refl, rel] = await Promise.all([
+    safe(fetch(G3D_API + '/memory/list?limit=500')),
+    safe(fetch(G3D_API + '/wm/entity/list?limit=200')),
+    safe(fetch(G3D_API + '/skill/list?limit=200')),
+    safe(fetch(G3D_API + '/worldmodel/list?limit=300')),
+    safe(fetch(G3D_API + '/preference/list?limit=200')),
+    safe(fetch(G3D_API + '/insight/list?limit=200')),
+    safe(fetch(G3D_API + '/reflection/list?limit=100')),
+    safe(fetch(G3D_API + '/wm/relation/list?limit=300'))
+  ]);
+  const nodes = []; const links = []; const idx = {};
+  const addNode = (id, label, type) => {
+    if (idx[id]) return; idx[id] = true;
+    nodes.push({ id, label: (label||'').slice(0,60), type, color: G3D_COLORS[type] || '#94a3b8', val: 1 });
+  };
+  (mem?.results || []).forEach(m => addNode('mem-' + m.id, m.name, 'memory'));
+  (wmEnt?.entities || []).forEach(e => addNode('ent-' + (e.entity_key || e.name), e.name, 'wm_entity'));
+  (skill?.results || []).forEach(s => addNode('skill-' + s.id, s.name, 'skill'));
+  (wm?.results || []).forEach(w => addNode('wm-' + w.id, (w.pattern||'').slice(0,50), 'worldmodel'));
+  (pref?.results || []).forEach(p => addNode('pref-' + p.id, (p.rule||'').slice(0,40), 'preference'));
+  (ins?.results || []).forEach(i => addNode('ins-' + i.id, (i.content||i.title||'insight').slice(0,40), 'insight'));
+  (refl?.results || []).forEach(r => addNode('refl-' + r.id, 'reflexión ' + (r.date||r.id), 'reflection'));
+
+  const entByName = {}, entByLower = {};
+  (wmEnt?.entities || []).forEach(e => {
+    const n = (e.name||'').toLowerCase().trim();
+    if (n) { entByName[n] = 'ent-' + (e.entity_key || e.name); entByLower[n] = entByName[n]; }
+  });
+  (rel?.relations || rel?.results || []).forEach(r => {
+    const s = entByName[(r.subject||'').toLowerCase().trim()];
+    const o = entByName[(r.object||'').toLowerCase().trim()];
+    if (s && o) links.push({ source: s, target: o, label: r.predicate, color: 'rgba(168,189,239,0.7)' });
+  });
+  (wm?.results || []).forEach(w => {
+    if (w.promoted_to === 'relation' && w.promoted_ref) {
+      const parts = String(w.promoted_ref).split('→');
+      if (parts.length === 3) {
+        const s = entByName[parts[0].trim().toLowerCase()];
+        const o = entByName[parts[2].trim().toLowerCase()];
+        if (s && o) links.push({ source: s, target: o, label: parts[1].trim(), color: 'rgba(251,191,36,0.6)' });
+      }
+    }
+  });
+  function linkMentions(srcId, text) {
+    if (!text) return;
+    const lower = String(text).toLowerCase();
+    Object.keys(entByLower).forEach(name => {
+      if (name.length < 4) return;
+      if (lower.includes(name)) links.push({ source: srcId, target: entByLower[name], color: 'rgba(192,132,252,0.25)' });
+    });
+  }
+  (mem?.results || []).forEach(m => linkMentions('mem-' + m.id, (m.content||'') + ' ' + (m.name||'') + ' ' + (m.description||'')));
+  (skill?.results || []).forEach(s => linkMentions('skill-' + s.id, (s.description||'') + ' ' + (s.steps||'')));
+  (wm?.results || []).forEach(w => linkMentions('wm-' + w.id, (w.pattern||'') + ' ' + (w.evidence||'')));
+  (pref?.results || []).forEach(p => linkMentions('pref-' + p.id, p.rule || ''));
+  (ins?.results || []).forEach(i => linkMentions('ins-' + i.id, (i.content||'') + ' ' + (i.text||'')));
+  (refl?.results || []).forEach(r => linkMentions('refl-' + r.id, (r.analysis||'') + ' ' + (r.insights||'') + ' ' + (r.actions||'')));
+
+  const memByDate = {};
+  (mem?.results || []).forEach(m => {
+    const d = (m.created_at||'').slice(0,10);
+    if (d) (memByDate[d] = memByDate[d] || []).push('mem-' + m.id);
+  });
+  (refl?.results || []).forEach(r => {
+    const d = (r.date || r.created_at || '').slice(0,10);
+    (memByDate[d] || []).slice(0, 6).forEach(memId => {
+      links.push({ source: 'refl-' + r.id, target: memId, color: 'rgba(234,179,8,0.25)' });
+    });
+  });
+
+  const seen = new Set();
+  const dedupLinks = links.filter(l => {
+    const k = l.source + '|' + l.target;
+    if (seen.has(k) || seen.has(l.target + '|' + l.source)) return false;
+    seen.add(k); return true;
+  });
+  const deg = {};
+  dedupLinks.forEach(l => { deg[l.source] = (deg[l.source]||0) + 1; deg[l.target] = (deg[l.target]||0) + 1; });
+  nodes.forEach(n => { n.val = 1 + (deg[n.id] || 0) * 1.2; });
+  return { nodes, links: dedupLinks };
+}
+
+let _g3dInited = false;
+window._initGraph3DLazy = async function() {
+  if (_g3dInited) return; _g3dInited = true;
+  const data = await loadG3DData();
+  let labelsOn = true, bloomOn = false, autoRotate = false;
+
+  const Graph = ForceGraph3D()(document.getElementById('graph3d'))
+    .backgroundColor('#000010')
+    .nodeColor(n => n.color)
+    .nodeOpacity(0.95)
+    .nodeRelSize(3.5)
+    .nodeVal(n => n.val)
+    .nodeThreeObject(node => {
+      const group = new THREE.Group();
+      const baseR = 2.2 + Math.sqrt(node.val) * 1.1;
+      group.add(new THREE.Mesh(new THREE.SphereGeometry(baseR * 0.55, 18, 18), new THREE.MeshBasicMaterial({ color: node.color, transparent: true, opacity: 0.95 })));
+      group.add(new THREE.Mesh(new THREE.SphereGeometry(baseR * 0.85, 16, 16), new THREE.MeshBasicMaterial({ color: node.color, transparent: true, opacity: 0.32, side: THREE.BackSide })));
+      group.add(new THREE.Mesh(new THREE.SphereGeometry(baseR * 1.6, 14, 14), new THREE.MeshBasicMaterial({ color: node.color, transparent: true, opacity: 0.12, side: THREE.BackSide, depthWrite: false })));
+      if (labelsOn && node.label) {
+        const sprite = new SpriteText(node.label);
+        sprite.color = '#e2e8f0'; sprite.backgroundColor = 'rgba(0,0,0,0.45)';
+        sprite.padding = 1.2; sprite.fontFace = 'Inter, system-ui';
+        sprite.textHeight = 1.6; sprite.position.y = baseR * 1.6 + 1.5;
+        sprite.material.depthWrite = false; group.add(sprite);
+      }
+      return group;
+    })
+    .linkColor(l => l.color || 'rgba(168,189,239,0.4)')
+    .linkOpacity(0.55)
+    .linkWidth(0.6)
+    .linkDirectionalParticles(2)
+    .linkDirectionalParticleSpeed(0.006)
+    .linkDirectionalParticleWidth(1.2)
+    .linkDirectionalArrowLength(2.5)
+    .linkDirectionalArrowRelPos(1)
+    .linkLabel(l => l.label || '')
+    .onNodeClick(n => {
+      autoRotate = false;
+      document.getElementById('g3dBtnRotate').classList.remove('active');
+      const distance = 80;
+      const distRatio = 1 + distance / Math.hypot(n.x||1, n.y||1, n.z||1);
+      Graph.cameraPosition({ x:(n.x||0)*distRatio, y:(n.y||0)*distRatio, z:(n.z||0)*distRatio }, n, 1500);
+    })
+    .graphData(data);
+
+  Graph.d3Force('charge').strength(-110);
+  Graph.d3Force('link').distance(50);
+
+  const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.6, 0.9, 0.05);
+  bloomPass.enabled = bloomOn;
+  Graph.postProcessingComposer().addPass(bloomPass);
+
+  const distance = 380;
+  let angle = 0;
+  setInterval(() => {
+    if (!autoRotate) return;
+    angle += Math.PI / 1200;
+    Graph.cameraPosition({
+      x: distance * Math.sin(angle),
+      z: distance * Math.cos(angle),
+      y: 60 * Math.sin(angle * 0.4)
+    });
+  }, 33);
+
+  document.getElementById('g3dBtnRotate').addEventListener('click', e => {
+    autoRotate = !autoRotate; e.target.classList.toggle('active', autoRotate);
+  });
+  document.getElementById('g3dBtnLabels').addEventListener('click', e => {
+    labelsOn = !labelsOn; e.target.classList.toggle('active', labelsOn);
+    Graph.refresh();
+  });
+  document.getElementById('g3dBtnBloom').addEventListener('click', e => {
+    bloomOn = !bloomOn; e.target.classList.toggle('active', bloomOn);
+    bloomPass.enabled = bloomOn;
+  });
+};
+
+// Mode toggle 2D ↔ 3D within the graph tab
+window._graphMode = '2d';
+function _g3dApplyMode() {
+  const onGraphTab = document.querySelector('.tab-btn[data-tab="graph"]')?.classList.contains('active');
+  const showing3d = onGraphTab && window._graphMode === '3d';
+  document.getElementById('graph').style.display = (onGraphTab && !showing3d) ? 'block' : 'none';
+  document.getElementById('graph3d').style.display = showing3d ? 'block' : 'none';
+  document.getElementById('graph3dControls').style.display = showing3d ? 'flex' : 'none';
+  if (showing3d) window._initGraph3DLazy && window._initGraph3DLazy();
+}
+function _g3dSetActive(activeId, idleId) {
+  const a = document.getElementById(activeId), b = document.getElementById(idleId);
+  a.classList.add('active'); a.style.background = 'rgba(255,107,107,0.2)'; a.style.color = '#ff6b6b';
+  b.classList.remove('active'); b.style.background = 'transparent'; b.style.color = '#94a3b8';
+}
+document.getElementById('graphMode2D').addEventListener('click', () => {
+  window._graphMode = '2d'; _g3dSetActive('graphMode2D', 'graphMode3D'); _g3dApplyMode();
+});
+document.getElementById('graphMode3D').addEventListener('click', () => {
+  window._graphMode = '3d'; _g3dSetActive('graphMode3D', 'graphMode2D'); _g3dApplyMode();
+});
+// Watch for tab changes to show/hide the mode toggle
+const _g3dTabObserver = new MutationObserver(() => {
+  const onGraphTab = document.querySelector('.tab-btn[data-tab="graph"]')?.classList.contains('active');
+  document.getElementById('graphModeToggle').style.display = onGraphTab ? 'flex' : 'none';
+  _g3dApplyMode();
+});
+document.querySelectorAll('.tab-btn').forEach(b => _g3dTabObserver.observe(b, { attributes: true, attributeFilter: ['class'] }));
+// Initial state
+setTimeout(() => {
+  const onGraphTab = document.querySelector('.tab-btn[data-tab="graph"]')?.classList.contains('active');
+  document.getElementById('graphModeToggle').style.display = onGraphTab ? 'flex' : 'none';
+}, 200);
 </script>
 </body>
 </html>
