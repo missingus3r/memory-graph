@@ -211,6 +211,7 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
     <button class="tab-btn" data-tab="brain">Brain<span class="tab-count" id="tc-brain"></span></button>
     <button class="tab-btn" data-tab="skills">Skills<span class="tab-count" id="tc-skills"></span></button>
     <button class="tab-btn" data-tab="crons">Crons<span class="tab-count" id="tc-crons"></span></button>
+    <button class="tab-btn" data-tab="realtime" title="OpenAI Realtime voz↔voz con contexto de Friday">🎙️ Realtime</button>
   </div>
   <button class="usage-btn" id="usageBtn" title="Consumo de Claude Code">$ Usage</button>
   <button class="usage-btn" id="backupBtn" title="Backup / Restore DB" style="border-color:rgba(251,191,36,0.35);background:rgba(251,191,36,0.08);color:#fbbf24">💾 Backup</button>
@@ -506,6 +507,56 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
 <div class="arch-modal" id="archModal">
   <button class="arch-modal-close" onclick="closeArchModal()">&times;</button>
   <div id="archModalContent"></div>
+</div>
+
+<!-- 🎙️ Realtime — OpenAI Realtime API voice↔voice with Friday context -->
+<div id="realtimePanel" style="display:none;position:fixed;top:var(--topbar-h);left:0;right:0;bottom:0;overflow-y:auto;background:#0a0a0f;padding:20px">
+  <div style="max-width:900px;margin:0 auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+      <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0">🎙️ Realtime <span style="font-size:11px;color:#64748b;font-weight:400">· gpt-realtime · voz ↔ voz con contexto Friday</span></h2>
+      <span id="rtClock" style="font-family:monospace;font-size:12px;color:#64748b"></span>
+    </div>
+
+    <p style="color:#64748b;font-size:12px;margin:0 0 16px 0;line-height:1.5">
+      Sesión WebRTC efímera contra OpenAI Realtime API. El servidor te entrega un <code style="color:#94a3b8">client_secret</code> de 2h (TTL hardcoded), el browser conecta directo. Cada transcript se loggea a <code style="color:#94a3b8">/conversation/log</code> con <code style="color:#94a3b8">channel=realtime</code>.
+      Costo aproximado: $0.06/min audio in + $0.24/min audio out.
+    </p>
+
+    <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+        <button id="rtStartBtn" style="padding:9px 18px;border-radius:8px;border:1px solid #34d399;background:rgba(52,211,153,0.15);color:#34d399;font-size:13px;font-weight:600;cursor:pointer">▶️ Start session</button>
+        <button id="rtStopBtn" disabled style="padding:9px 18px;border-radius:8px;border:1px solid rgba(248,113,113,0.4);background:rgba(248,113,113,0.08);color:#f87171;font-size:13px;font-weight:600;cursor:pointer;opacity:0.4">⏹️ Stop</button>
+        <select id="rtVoice" style="padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:#0f172a;color:#e2e8f0;font-size:12px">
+          <option value="marin">marin (default — neutra)</option>
+          <option value="alloy">alloy</option>
+          <option value="cedar">cedar</option>
+          <option value="echo">echo</option>
+          <option value="shimmer">shimmer</option>
+          <option value="verse">verse</option>
+        </select>
+        <span id="rtStatus" style="font-size:12px;color:#64748b;margin-left:auto">disconnected</span>
+      </div>
+      <audio id="rtAudio" autoplay></audio>
+    </div>
+
+    <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <input id="rtTextInput" type="text" placeholder="Escribí un mensaje (alternativa al micrófono)..." disabled style="flex:1;padding:9px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:#0f172a;color:#e2e8f0;font-size:13px">
+        <button id="rtTextSend" disabled style="padding:9px 16px;border-radius:8px;border:1px solid rgba(96,165,250,0.4);background:rgba(96,165,250,0.12);color:#60a5fa;font-size:12px;font-weight:600;cursor:pointer;opacity:0.4">Enviar</button>
+      </div>
+      <p style="margin:0;color:#64748b;font-size:11px">Hablás libremente al mic; el texto es backup. Ctrl+Enter envía.</p>
+    </div>
+
+    <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <h3 style="color:#e2e8f0;font-size:13px;font-weight:700;margin:0">Transcript en vivo</h3>
+        <button id="rtClearTranscript" style="padding:4px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);background:transparent;color:#64748b;font-size:11px;cursor:pointer">Limpiar</button>
+      </div>
+      <div id="rtTranscript" style="max-height:50vh;overflow-y:auto;font-size:13px;line-height:1.5">
+        <p style="color:#475569;font-size:12px;text-align:center;margin:20px 0">Sin actividad. Tocá <b>Start</b> para arrancar.</p>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Phase 4: Toast stack for SSE harness writes -->
@@ -963,8 +1014,9 @@ function switchTab(tab) {
   document.getElementById('brainPanel').style.display = tab === 'brain' ? 'block' : 'none';
   document.getElementById('skillsPanel').style.display = tab === 'skills' ? 'block' : 'none';
   document.getElementById('cronsPanel').style.display = tab === 'crons' ? 'block' : 'none';
+  document.getElementById('realtimePanel').style.display = tab === 'realtime' ? 'block' : 'none';
   if (showing3d) window._initGraph3DLazy && window._initGraph3DLazy();
-  document.body.style.overflow = (['logs','rag','brain','skills','crons'].includes(tab)) ? 'auto' : 'hidden';
+  document.body.style.overflow = (['logs','rag','brain','skills','crons','realtime'].includes(tab)) ? 'auto' : 'hidden';
 
   document.querySelector('.filters').style.display = tab === 'graph' ? 'flex' : 'none';
   document.querySelector('.legend').style.display = tab === 'graph' ? 'flex' : 'none';
@@ -984,7 +1036,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // Restore tab from hash (deferred to ensure all data is defined)
 window.addEventListener('hashchange', () => {
   const h = location.hash.replace('#','');
-  if (['logs','graph','arch','rag','brain','skills','crons'].includes(h)) switchTab(h);
+  if (['logs','graph','arch','rag','brain','skills','crons','realtime'].includes(h)) switchTab(h);
 });
 
 // === Tab counts (single fetch to /tab/counts, refreshes every 60s) ===
@@ -2933,7 +2985,7 @@ async function renderMetrics() {
 
 // Restore tab from hash (after all data is defined)
 const hashTab = location.hash.replace('#','');
-if (['logs','graph','arch','rag','brain','skills','crons'].includes(hashTab)) switchTab(hashTab);
+if (['logs','graph','arch','rag','brain','skills','crons','realtime'].includes(hashTab)) switchTab(hashTab);
 </script>
 <script>
 // ─── Claude Code Usage dashboard ────────────────────────────────
@@ -3544,6 +3596,223 @@ setTimeout(() => {
   const onGraphTab = document.querySelector('.tab-btn[data-tab="graph"]')?.classList.contains('active');
   document.getElementById('graphModeToggle').style.display = onGraphTab ? 'flex' : 'none';
 }, 200);
+
+// ────────────────────────────────────────────────────────────────
+// 🎙️ Realtime — OpenAI Realtime API WebRTC client
+// Flow: fetch ephemeral token from /realtime/session → getUserMedia (mic)
+// → RTCPeerConnection → POST SDP offer to https://api.openai.com/v1/realtime/calls
+// → data channel for events (transcripts, text input) → audio element for output.
+// ────────────────────────────────────────────────────────────────
+(() => {
+  let rtPc = null, rtDc = null, rtStream = null, rtSessionStart = null, rtClockTimer = null;
+
+  const rtStatus = document.getElementById('rtStatus');
+  const rtStartBtn = document.getElementById('rtStartBtn');
+  const rtStopBtn = document.getElementById('rtStopBtn');
+  const rtAudio = document.getElementById('rtAudio');
+  const rtTranscript = document.getElementById('rtTranscript');
+  const rtTextInput = document.getElementById('rtTextInput');
+  const rtTextSend = document.getElementById('rtTextSend');
+  const rtClearTranscript = document.getElementById('rtClearTranscript');
+  const rtVoice = document.getElementById('rtVoice');
+  const rtClock = document.getElementById('rtClock');
+
+  function setStatus(s, color) {
+    rtStatus.textContent = s;
+    rtStatus.style.color = color || '#64748b';
+  }
+
+  function setRunning(running) {
+    rtStartBtn.disabled = running;
+    rtStartBtn.style.opacity = running ? 0.4 : 1;
+    rtStopBtn.disabled = !running;
+    rtStopBtn.style.opacity = running ? 1 : 0.4;
+    rtTextInput.disabled = !running;
+    rtTextSend.disabled = !running;
+    rtTextSend.style.opacity = running ? 1 : 0.4;
+    rtVoice.disabled = running;
+  }
+
+  function appendTranscript(role, text, partial) {
+    if (rtTranscript.querySelector('p[style*="475569"]')) rtTranscript.innerHTML = '';
+    const color = role === 'user' ? '#60a5fa' : (role === 'assistant' ? '#34d399' : '#94a3b8');
+    const label = role === 'user' ? 'Vos' : (role === 'assistant' ? 'Friday' : role);
+    const div = document.createElement('div');
+    div.style.marginBottom = '8px';
+    div.style.opacity = partial ? '0.65' : '1';
+    div.innerHTML = `<span style="color:${color};font-weight:600;font-size:11px">${label}:</span> <span style="color:#cbd5e1">${text.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</span>`;
+    rtTranscript.appendChild(div);
+    rtTranscript.scrollTop = rtTranscript.scrollHeight;
+    return div;
+  }
+
+  async function logTranscript(role, content) {
+    if (!content || !content.trim()) return;
+    try {
+      await fetch(API + '/realtime/log', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({role, content, session_id: rtSessionStart || ''}),
+      });
+    } catch (e) { console.warn('rt log failed', e); }
+  }
+
+  async function startSession() {
+    try {
+      setStatus('fetching token…', '#fbbf24');
+      const ctxResp = await fetch(API + '/realtime/context');
+      const ctx = await ctxResp.json();
+      const sysPrompt = ctx.system_prompt || 'Sos Friday, asistente de Bruno.';
+
+      const sessResp = await fetch(API + '/realtime/session', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({voice: rtVoice.value}),
+      });
+      const sess = await sessResp.json();
+      if (!sessResp.ok || !sess.value) {
+        const errMsg = sess.error || JSON.stringify(sess);
+        setStatus('error: ' + errMsg.slice(0, 60), '#f87171');
+        appendTranscript('system', 'Error iniciando sesión: ' + errMsg);
+        return;
+      }
+      const EPHEMERAL_KEY = sess.value;
+
+      setStatus('requesting mic…', '#fbbf24');
+      rtStream = await navigator.mediaDevices.getUserMedia({audio: true});
+
+      rtPc = new RTCPeerConnection();
+      rtPc.ontrack = (e) => { rtAudio.srcObject = e.streams[0]; };
+      rtStream.getTracks().forEach(t => rtPc.addTrack(t, rtStream));
+
+      rtDc = rtPc.createDataChannel('oai-events');
+      let userPartial = null, asstPartial = null;
+
+      rtDc.addEventListener('open', () => {
+        setStatus('connected', '#34d399');
+        rtSessionStart = new Date().toISOString();
+        startClock();
+        // Inject Friday context as session instructions
+        rtDc.send(JSON.stringify({
+          type: 'session.update',
+          session: {
+            instructions: sysPrompt,
+            input_audio_transcription: {model: 'whisper-1'},
+          },
+        }));
+      });
+
+      rtDc.addEventListener('message', (ev) => {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch { return; }
+        // User speech (transcribed)
+        if (msg.type === 'conversation.item.input_audio_transcription.completed') {
+          appendTranscript('user', msg.transcript || '');
+          logTranscript('user', msg.transcript || '');
+        }
+        // Assistant text deltas (streaming)
+        if (msg.type === 'response.audio_transcript.delta') {
+          if (!asstPartial) asstPartial = appendTranscript('assistant', msg.delta || '', true);
+          else asstPartial.querySelector('span:last-child').textContent += (msg.delta || '');
+          rtTranscript.scrollTop = rtTranscript.scrollHeight;
+        }
+        if (msg.type === 'response.audio_transcript.done') {
+          if (asstPartial) {
+            asstPartial.style.opacity = '1';
+            const fullText = asstPartial.querySelector('span:last-child').textContent;
+            logTranscript('assistant', fullText);
+          }
+          asstPartial = null;
+        }
+        if (msg.type === 'error') {
+          appendTranscript('system', 'OpenAI error: ' + JSON.stringify(msg.error || msg));
+        }
+      });
+
+      rtDc.addEventListener('close', () => setStatus('disconnected', '#64748b'));
+
+      const offer = await rtPc.createOffer();
+      await rtPc.setLocalDescription(offer);
+
+      setStatus('connecting…', '#fbbf24');
+      const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls', {
+        method: 'POST',
+        body: offer.sdp,
+        headers: {
+          'Authorization': `Bearer ${EPHEMERAL_KEY}`,
+          'Content-Type': 'application/sdp',
+        },
+      });
+      if (!sdpResp.ok) {
+        const txt = await sdpResp.text();
+        setStatus('SDP error ' + sdpResp.status, '#f87171');
+        appendTranscript('system', 'SDP exchange falló: ' + txt.slice(0, 200));
+        stopSession();
+        return;
+      }
+      const answer = {type: 'answer', sdp: await sdpResp.text()};
+      await rtPc.setRemoteDescription(answer);
+
+      setRunning(true);
+    } catch (e) {
+      setStatus('error: ' + e.message, '#f87171');
+      appendTranscript('system', 'Error: ' + e.message);
+      stopSession();
+    }
+  }
+
+  function stopSession() {
+    if (rtDc) { try { rtDc.close(); } catch {} rtDc = null; }
+    if (rtPc) { try { rtPc.close(); } catch {} rtPc = null; }
+    if (rtStream) { rtStream.getTracks().forEach(t => t.stop()); rtStream = null; }
+    if (rtAudio) rtAudio.srcObject = null;
+    stopClock();
+    setRunning(false);
+    setStatus('disconnected', '#64748b');
+  }
+
+  function sendText() {
+    const txt = rtTextInput.value.trim();
+    if (!txt || !rtDc || rtDc.readyState !== 'open') return;
+    rtDc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {type: 'message', role: 'user', content: [{type: 'input_text', text: txt}]},
+    }));
+    rtDc.send(JSON.stringify({type: 'response.create'}));
+    appendTranscript('user', txt);
+    logTranscript('user', txt);
+    rtTextInput.value = '';
+  }
+
+  function startClock() {
+    const t0 = Date.now();
+    stopClock();
+    rtClockTimer = setInterval(() => {
+      const s = Math.floor((Date.now() - t0) / 1000);
+      const mm = String(Math.floor(s/60)).padStart(2,'0');
+      const ss = String(s%60).padStart(2,'0');
+      rtClock.textContent = `⏱ ${mm}:${ss}`;
+    }, 1000);
+  }
+  function stopClock() {
+    if (rtClockTimer) clearInterval(rtClockTimer);
+    rtClockTimer = null;
+    rtClock.textContent = '';
+  }
+
+  rtStartBtn.addEventListener('click', startSession);
+  rtStopBtn.addEventListener('click', stopSession);
+  rtTextSend.addEventListener('click', sendText);
+  rtTextInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendText();
+  });
+  rtClearTranscript.addEventListener('click', () => {
+    rtTranscript.innerHTML = '<p style="color:#475569;font-size:12px;text-align:center;margin:20px 0">Transcript limpiado.</p>';
+  });
+
+  // Cleanup if user navigates away from the tab
+  window.addEventListener('beforeunload', () => { if (rtPc) stopSession(); });
+})();
 </script>
 </body>
 </html>

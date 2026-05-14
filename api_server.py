@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.17.1"
+VERSION = "2.18.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -4573,6 +4573,126 @@ def usage_elevenlabs_refresh():
     t = threading.Thread(target=_fetch_elevenlabs_background, daemon=True)
     t.start()
     return jsonify({"started": True, "fetching": True})
+
+
+# ───────────────────────────────────────────────────────────────
+# OpenAI Realtime API — ephemeral sessions + context for browser
+# WebRTC peer connection happens directly browser↔OpenAI; server
+# only mints the short-lived client_secret and provides Friday's
+# context snapshot so the browser can wire it as a system prompt.
+# Docs: https://developers.openai.com/api/docs/guides/realtime-webrtc
+# ───────────────────────────────────────────────────────────────
+@app.route("/realtime/session", methods=["POST"])
+def realtime_session():
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return jsonify({"error": "OPENAI_API_KEY not configured"}), 500
+
+    body = request.get_json(silent=True) or {}
+    voice = body.get("voice", "marin")
+    model = body.get("model", "gpt-realtime")
+
+    payload = {
+        "session": {
+            "type": "realtime",
+            "model": model,
+            "audio": {"output": {"voice": voice}},
+        }
+    }
+    try:
+        import urllib.request
+        import urllib.error
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/realtime/client_secrets",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8")
+        except Exception:
+            err_body = str(e)
+        return jsonify({"error": f"OpenAI {e.code}: {err_body}"}), 502
+    except Exception as e:
+        return jsonify({"error": f"realtime/session failed: {e}"}), 502
+
+    return jsonify(data)
+
+
+@app.route("/realtime/context", methods=["GET"])
+def realtime_context():
+    """Snapshot of Friday's persona + active preferences + recent conversation
+    so the browser can inject it as a system prompt for the realtime session."""
+    db = get_db()
+    persona = (
+        "Sos Friday, asistente personal de Bruno. Hablás español rioplatense, "
+        "tono informal pero sin puteadas fuertes. Sos concisa y directa. "
+        "Conocés a Bruno: dev/data, Montevideo, interesado en IA y memory systems. "
+        "Cuando no sepas algo, decilo. Si vas a hacer una afirmación factual "
+        "fuerte, marcala como incierta. Esto es una conversación de voz: "
+        "frases cortas, no listas largas."
+    )
+
+    try:
+        prefs = list(db.execute(
+            "SELECT rule FROM preferences WHERE confidence >= 0.7 "
+            "ORDER BY confidence DESC LIMIT 20"
+        ))
+        prefs_text = "\n".join(f"- {r[0]}" for r in prefs if r and r[0])
+    except Exception:
+        prefs_text = ""
+
+    try:
+        recent = list(db.execute(
+            "SELECT role, content FROM conversations "
+            "WHERE role IN ('user','assistant') "
+            "ORDER BY id DESC LIMIT 10"
+        ))
+        recent_text = "\n".join(
+            f"{r[0]}: {(r[1] or '')[:200]}" for r in reversed(recent)
+        )
+    except Exception:
+        recent_text = ""
+
+    system_prompt = persona
+    if prefs_text:
+        system_prompt += "\n\nPreferencias activas de Bruno:\n" + prefs_text
+    if recent_text:
+        system_prompt += "\n\nÚltimos mensajes (contexto):\n" + recent_text
+
+    return jsonify({
+        "system_prompt": system_prompt,
+        "persona_len": len(persona),
+        "prefs_count": len(prefs_text.splitlines()) if prefs_text else 0,
+        "recent_count": len(recent_text.splitlines()) if recent_text else 0,
+    })
+
+
+@app.route("/realtime/log", methods=["POST"])
+def realtime_log():
+    """Log a realtime transcript entry to /conversation/log channel='realtime'."""
+    body = request.get_json(silent=True) or {}
+    role = body.get("role", "")
+    content = (body.get("content") or "").strip()
+    if role not in ("user", "assistant") or not content:
+        return jsonify({"error": "role must be user/assistant and content non-empty"}), 400
+
+    db = get_db()
+    db["conversations"].insert({
+        "role": role,
+        "content": content,
+        "channel": "realtime",
+        "timestamp": now_iso(),
+        "session_id": body.get("session_id", ""),
+        "importance": 0.5,
+    })
+    return jsonify({"status": "ok"})
 
 
 if __name__ == "__main__":
