@@ -3706,6 +3706,7 @@ setTimeout(() => {
         rtDc.send(JSON.stringify({
           type: 'session.update',
           session: {
+            type: 'realtime',
             instructions: sysPrompt,
             audio: {
               input: {transcription: {model: 'gpt-realtime-whisper'}},
