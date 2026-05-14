@@ -527,8 +527,10 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
         <button id="rtStartBtn" style="padding:9px 18px;border-radius:8px;border:1px solid #34d399;background:rgba(52,211,153,0.15);color:#34d399;font-size:13px;font-weight:600;cursor:pointer">▶️ Start session</button>
         <button id="rtStopBtn" disabled style="padding:9px 18px;border-radius:8px;border:1px solid rgba(248,113,113,0.4);background:rgba(248,113,113,0.08);color:#f87171;font-size:13px;font-weight:600;cursor:pointer;opacity:0.4">⏹️ Stop</button>
         <select id="rtModel" style="padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:#0f172a;color:#e2e8f0;font-size:12px" title="Modelo realtime">
-          <option value="gpt-realtime-mini">gpt-realtime-mini (default · cheap)</option>
-          <option value="gpt-realtime">gpt-realtime (full · requiere tier)</option>
+          <option value="gpt-realtime-2">gpt-realtime-2 (default · GPT-5 reasoning · 2026-05-07)</option>
+          <option value="gpt-realtime-translate">gpt-realtime-translate (traducción en vivo)</option>
+          <option value="gpt-realtime-mini">gpt-realtime-mini (cheap fallback)</option>
+          <option value="gpt-realtime">gpt-realtime (full v1 · requiere tier)</option>
           <option value="gpt-4o-realtime-preview">gpt-4o-realtime-preview</option>
           <option value="gpt-4o-mini-realtime-preview">gpt-4o-mini-realtime-preview</option>
         </select>
@@ -3705,7 +3707,9 @@ setTimeout(() => {
           type: 'session.update',
           session: {
             instructions: sysPrompt,
-            input_audio_transcription: {model: 'gpt-4o-mini-transcribe'},
+            audio: {
+              input: {transcription: {model: 'gpt-realtime-whisper'}},
+            },
           },
         }));
       });
