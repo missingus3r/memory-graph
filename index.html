@@ -3705,7 +3705,7 @@ setTimeout(() => {
           type: 'session.update',
           session: {
             instructions: sysPrompt,
-            input_audio_transcription: {model: 'whisper-1'},
+            input_audio_transcription: {model: 'gpt-4o-mini-transcribe'},
           },
         }));
       });
@@ -3754,7 +3754,11 @@ setTimeout(() => {
       if (!sdpResp.ok) {
         const txt = await sdpResp.text();
         setStatus('SDP error ' + sdpResp.status, '#f87171');
-        appendTranscript('system', 'SDP exchange falló: ' + txt.slice(0, 200));
+        if (txt.includes('model_not_found')) {
+          appendTranscript('system', `⚠️ Tu cuenta no tiene acceso al modelo "${rtModel.value}". Probá con gpt-realtime-mini (default).`);
+        } else {
+          appendTranscript('system', 'SDP exchange falló: ' + txt.slice(0, 300));
+        }
         stopSession();
         return;
       }
