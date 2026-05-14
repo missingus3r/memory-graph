@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.18.0"
+VERSION = "2.18.1"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -4590,7 +4590,9 @@ def realtime_session():
 
     body = request.get_json(silent=True) or {}
     voice = body.get("voice", "marin")
-    model = body.get("model", "gpt-realtime")
+    # Default to gpt-realtime-mini — the full gpt-realtime requires a separate
+    # tier on the OpenAI account. Browser exposes a selector for advanced use.
+    model = body.get("model", "gpt-realtime-mini")
 
     payload = {
         "session": {

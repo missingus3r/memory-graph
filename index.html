@@ -526,6 +526,12 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
         <button id="rtStartBtn" style="padding:9px 18px;border-radius:8px;border:1px solid #34d399;background:rgba(52,211,153,0.15);color:#34d399;font-size:13px;font-weight:600;cursor:pointer">▶️ Start session</button>
         <button id="rtStopBtn" disabled style="padding:9px 18px;border-radius:8px;border:1px solid rgba(248,113,113,0.4);background:rgba(248,113,113,0.08);color:#f87171;font-size:13px;font-weight:600;cursor:pointer;opacity:0.4">⏹️ Stop</button>
+        <select id="rtModel" style="padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:#0f172a;color:#e2e8f0;font-size:12px" title="Modelo realtime">
+          <option value="gpt-realtime-mini">gpt-realtime-mini (default · cheap)</option>
+          <option value="gpt-realtime">gpt-realtime (full · requiere tier)</option>
+          <option value="gpt-4o-realtime-preview">gpt-4o-realtime-preview</option>
+          <option value="gpt-4o-mini-realtime-preview">gpt-4o-mini-realtime-preview</option>
+        </select>
         <select id="rtVoice" style="padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:#0f172a;color:#e2e8f0;font-size:12px">
           <option value="marin">marin (default — neutra)</option>
           <option value="alloy">alloy</option>
@@ -3615,6 +3621,7 @@ setTimeout(() => {
   const rtTextSend = document.getElementById('rtTextSend');
   const rtClearTranscript = document.getElementById('rtClearTranscript');
   const rtVoice = document.getElementById('rtVoice');
+  const rtModel = document.getElementById('rtModel');
   const rtClock = document.getElementById('rtClock');
 
   function setStatus(s, color) {
@@ -3631,6 +3638,7 @@ setTimeout(() => {
     rtTextSend.disabled = !running;
     rtTextSend.style.opacity = running ? 1 : 0.4;
     rtVoice.disabled = running;
+    if (rtModel) rtModel.disabled = running;
   }
 
   function appendTranscript(role, text, partial) {
@@ -3667,7 +3675,7 @@ setTimeout(() => {
       const sessResp = await fetch(API + '/realtime/session', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({voice: rtVoice.value}),
+        body: JSON.stringify({voice: rtVoice.value, model: rtModel.value}),
       });
       const sess = await sessResp.json();
       if (!sessResp.ok || !sess.value) {
