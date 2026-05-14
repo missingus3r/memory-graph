@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.18.3"
+VERSION = "2.18.4"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -1535,7 +1535,13 @@ def graph():
         return redirect("/login?next=/graph")
     graph_path = Path.home() / "proyectos" / "memory-graph" / "index.html"
     if graph_path.exists():
-        return send_file(str(graph_path))
+        resp = make_response(send_file(str(graph_path)))
+        # Disable HTTP caching — UI is iterated frequently, stale JS/HTML in
+        # the browser has bitten us before with realtime-tab debugging.
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
     return jsonify({"error": "Graph not found"}), 404
 
 
