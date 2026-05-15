@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.18.8"
+VERSION = "2.18.9"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -4702,6 +4702,126 @@ def realtime_log():
         "importance": 0.5,
     })
     return jsonify({"status": "ok"})
+
+
+# ────────────────────────────────────────────────────────────────
+# Realtime tools (function calling from Realtime voice agent)
+# Each endpoint is callable from index.html when the model invokes a tool.
+# Keep the set conservative — no shell exec, no arbitrary file write.
+# ────────────────────────────────────────────────────────────────
+
+@app.route("/tool/web_search", methods=["POST"])
+def tool_web_search():
+    body = request.get_json(silent=True) or {}
+    query = (body.get("query") or "").strip()
+    if not query:
+        return jsonify({"error": "query required"}), 400
+    try:
+        from ddgs import DDGS
+        with DDGS() as ddgs:
+            hits = list(ddgs.text(query, max_results=5))
+        results = [{
+            "title": h.get("title", ""),
+            "url": h.get("href", ""),
+            "snippet": (h.get("body", "") or "")[:280],
+        } for h in hits]
+        return jsonify({"query": query, "results": results, "count": len(results)})
+    except Exception as e:
+        return jsonify({"error": f"search failed: {e}"}), 500
+
+
+@app.route("/tool/memory_recall", methods=["POST"])
+def tool_memory_recall():
+    body = request.get_json(silent=True) or {}
+    topic = (body.get("topic") or "").strip()
+    if not topic:
+        return jsonify({"error": "topic required"}), 400
+    db = get_db()
+    rows = list(db["memories"].rows_where(
+        "content LIKE ? OR name LIKE ? OR description LIKE ?",
+        [f"%{topic}%", f"%{topic}%", f"%{topic}%"],
+        order_by="created_at DESC",
+        limit=5,
+    ))
+    return jsonify({"topic": topic, "results": [{
+        "name": r.get("name"),
+        "type": r.get("type"),
+        "description": (r.get("description", "") or "")[:200],
+        "content": (r.get("content", "") or "")[:500],
+    } for r in rows], "count": len(rows)})
+
+
+@app.route("/tool/memory_store", methods=["POST"])
+def tool_memory_store():
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    mtype = (body.get("type") or "project").strip()
+    content = (body.get("content") or "").strip()
+    description = (body.get("description") or content[:120]).strip()
+    if not name or not content:
+        return jsonify({"error": "name and content required"}), 400
+    if mtype not in ("user", "feedback", "project", "reference"):
+        mtype = "project"
+    db = get_db()
+    db["memories"].insert({
+        "name": name, "type": mtype, "content": content,
+        "description": description,
+        "created_at": now_iso(), "updated_at": now_iso(),
+        "tags": "[]",
+    })
+    return jsonify({"status": "stored", "name": name, "type": mtype})
+
+
+@app.route("/tool/system_info", methods=["POST"])
+def tool_system_info():
+    import shutil, datetime as _dt
+    info = {"date": _dt.datetime.now().isoformat(timespec="seconds")}
+    try:
+        du_root = shutil.disk_usage("/")
+        info["disk_root_free_gb"] = round(du_root.free / 1024**3, 1)
+        info["disk_root_used_pct"] = round((du_root.used / du_root.total) * 100)
+    except Exception: pass
+    try:
+        du_ext = shutil.disk_usage("/mnt/external")
+        info["disk_external_free_gb"] = round(du_ext.free / 1024**3, 1)
+    except Exception: pass
+    try:
+        with open("/proc/uptime") as f:
+            up = float(f.read().split()[0])
+        info["uptime_hours"] = round(up / 3600, 1)
+    except Exception: pass
+    return jsonify(info)
+
+
+@app.route("/tool/cron_list", methods=["POST"])
+def tool_cron_list():
+    db = get_db()
+    try:
+        rows = list(db["cron_active"].rows_where(order_by="updated_at DESC", limit=30))
+    except Exception:
+        rows = []
+    return jsonify({"count": len(rows), "crons": [{
+        "name": r.get("name", ""),
+        "schedule": r.get("schedule", ""),
+        "last_seen": r.get("updated_at", ""),
+    } for r in rows]})
+
+
+@app.route("/tool/note_add", methods=["POST"])
+def tool_note_add():
+    body = request.get_json(silent=True) or {}
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "text required"}), 400
+    import datetime as _dt, os as _os
+    home = _os.path.expanduser("~")
+    notas_path = _os.path.join(home, "notas", "notas.md")
+    _os.makedirs(_os.path.dirname(notas_path), exist_ok=True)
+    ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    block = f"\n---\n**{ts}** · nota via realtime tool\n\n{text}\n"
+    with open(notas_path, "a", encoding="utf-8") as f:
+        f.write(block)
+    return jsonify({"status": "appended", "file": notas_path, "ts": ts, "note": "Sincronizar a Notion KB en próxima sesión Claude."})
 
 
 if __name__ == "__main__":

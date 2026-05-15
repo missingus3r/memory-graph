@@ -3834,7 +3834,16 @@ setTimeout(() => {
         setStatus('connected', '#34d399');
         rtSessionStart = new Date().toISOString();
         startClock();
-        // Inject Friday context as session instructions
+        // Tools available to Friday during realtime sessions
+        const rtTools = [
+          {type: 'function', name: 'web_search',    description: 'Busca en internet via DuckDuckGo y devuelve top 5 resultados con título, URL y snippet.', parameters: {type:'object', properties:{query:{type:'string', description:'Query de búsqueda'}}, required:['query']}},
+          {type: 'function', name: 'memory_recall', description: 'Busca en la memoria persistente de Friday por tema.',                                       parameters: {type:'object', properties:{topic:{type:'string'}}, required:['topic']}},
+          {type: 'function', name: 'memory_store',  description: 'Guarda algo en la memoria persistente de Friday. type ∈ {user,feedback,project,reference}.', parameters: {type:'object', properties:{name:{type:'string'}, type:{type:'string', enum:['user','feedback','project','reference']}, content:{type:'string'}, description:{type:'string'}}, required:['name','content']}},
+          {type: 'function', name: 'system_info',   description: 'Devuelve fecha actual, espacio libre en disco interno + externo, uptime.',                  parameters: {type:'object', properties:{}, required:[]}},
+          {type: 'function', name: 'cron_list',     description: 'Lista los crons activos del sistema (nombre, schedule, última vez visto).',                  parameters: {type:'object', properties:{}, required:[]}},
+          {type: 'function', name: 'note_add',      description: 'Agrega una nota a notas.md de Bruno con timestamp. Para apuntes rápidos.',                   parameters: {type:'object', properties:{text:{type:'string'}}, required:['text']}},
+        ];
+        // Inject Friday context + tools as session instructions
         rtDc.send(JSON.stringify({
           type: 'session.update',
           session: {
@@ -3843,9 +3852,38 @@ setTimeout(() => {
             audio: {
               input: {transcription: {model: 'gpt-realtime-whisper'}},
             },
+            tools: rtTools,
+            tool_choice: 'auto',
           },
         }));
       });
+
+      async function rtRunTool(name, args, callId) {
+        appendTranscript('system', `🛠️ ejecutando ${name}(${JSON.stringify(args).slice(0,80)})`);
+        try {
+          const resp = await fetch(API + '/tool/' + name, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(args || {}),
+          });
+          const out = await resp.json();
+          const outStr = JSON.stringify(out);
+          rtDc.send(JSON.stringify({
+            type: 'conversation.item.create',
+            item: {type: 'function_call_output', call_id: callId, output: outStr},
+          }));
+          rtDc.send(JSON.stringify({type: 'response.create'}));
+          appendTranscript('system', `✓ ${name} → ${outStr.slice(0,140)}${outStr.length>140?'…':''}`);
+        } catch (e) {
+          const errOut = JSON.stringify({error: String(e)});
+          rtDc.send(JSON.stringify({
+            type: 'conversation.item.create',
+            item: {type: 'function_call_output', call_id: callId, output: errOut},
+          }));
+          rtDc.send(JSON.stringify({type: 'response.create'}));
+          appendTranscript('system', `✗ ${name} error: ${e}`);
+        }
+      }
 
       rtDc.addEventListener('message', (ev) => {
         let msg;
@@ -3868,6 +3906,12 @@ setTimeout(() => {
             logTranscript('assistant', fullText);
           }
           asstPartial = null;
+        }
+        // Function calling: model invokes a tool
+        if (msg.type === 'response.function_call_arguments.done') {
+          let args = {};
+          try { args = JSON.parse(msg.arguments || '{}'); } catch {}
+          rtRunTool(msg.name, args, msg.call_id);
         }
         if (msg.type === 'error') {
           appendTranscript('system', 'OpenAI error: ' + JSON.stringify(msg.error || msg));
