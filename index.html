@@ -3689,6 +3689,9 @@ setTimeout(() => {
       const EPHEMERAL_KEY = sess.value;
 
       setStatus('requesting mic…', '#fbbf24');
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Tu navegador no expone navigator.mediaDevices (secure context requerido). Usá http://127.0.0.1:7777/graph o https://. URL actual: ' + location.href);
+      }
       rtStream = await navigator.mediaDevices.getUserMedia({audio: true});
 
       rtPc = new RTCPeerConnection();
