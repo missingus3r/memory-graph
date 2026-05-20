@@ -4901,59 +4901,111 @@ def elevenlabs_conversation_token():
         return jsonify({"error": f"token fetch failed: {e}"}), 502
 
 
+class _AsyncWSAdapter:
+    """Wrapper async-compatible alrededor de flask-sock's sync ws.
+    Implements WebSocketLike (async recv/send/close)."""
+    def __init__(self, sync_ws):
+        self._ws = sync_ws
+        import asyncio as _asyncio
+        self._loop = _asyncio.get_event_loop_policy().get_event_loop()
+
+    async def recv(self):
+        # Run blocking receive in thread executor
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self._ws.receive(timeout=300))
+
+    async def send(self, data):
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self._ws.send(data))
+
+    async def close(self):
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._ws.close)
+
+
 if _sock is not None:
     @_sock.route("/ws/elevenlabs")
     def ws_elevenlabs(ws):
-        """WebSocket que recibe transcripciones de ElevenLabs Speech Engine.
-        ElevenLabs envía eventos JSON (transcript user, etc). El server responde
-        con stream de texto que ElevenLabs convierte a TTS y reproduce en browser.
+        """WebSocket bridge a ElevenLabs Speech Engine SDK.
 
-        Minimal MVP: eco del último transcript (sin LLM) + log a conversation_log.
-        Para LLM real, conectar acá con OpenAI/Anthropic/Claude API.
+        Validar JWT del header, wrap ws con AsyncWSAdapter, crear session via SDK,
+        registrar handler on('user_transcript') → echo MVP, correr session.run().
         """
-        import json as _json
-        try:
-            while True:
-                raw = ws.receive(timeout=60)
-                if raw is None:
-                    break
-                try:
-                    msg = _json.loads(raw) if isinstance(raw, str) else {}
-                except Exception:
-                    msg = {}
-                msg_type = msg.get("type") or msg.get("event") or ""
-                text = msg.get("text") or msg.get("transcript") or msg.get("content") or ""
+        import os as _os
+        import asyncio as _asyncio
+        import logging as _logging
+        _log = _logging.getLogger("se_ws")
 
-                # Log inbound user transcript
-                if msg_type in ("user_transcript", "transcript.final", "user_message") and text:
+        api_key = _os.environ.get("ELEVENLABS_API_KEY", "")
+        se_id = _os.environ.get("ELEVENLABS_SPEECH_ENGINE_ID", "")
+        if not api_key or not se_id:
+            _log.warning("[se] missing api_key or se_id")
+            try: ws.close()
+            except Exception: pass
+            return
+
+        try:
+            from elevenlabs import ElevenLabs
+            el = ElevenLabs(api_key=api_key)
+            engine = el.speech_engine.get(se_id)
+        except Exception as e:
+            _log.exception("[se] engine.get failed: %s", e)
+            try: ws.close()
+            except Exception: pass
+            return
+
+        # Verify request (best effort — header puede no estar accesible aquí)
+        try:
+            headers = {k.lower(): v for k, v in (request.headers.items() if request else [])}
+            if not engine.verify_request(headers):
+                _log.warning("[se] JWT verification FAILED; closing")
+                try: ws.close()
+                except Exception: pass
+                return
+            _log.info("[se] JWT verified OK, opening session")
+        except Exception as e:
+            _log.warning("[se] verify_request error (continuing): %s", e)
+
+        async_ws = _AsyncWSAdapter(ws)
+
+        async def _run():
+            try:
+                session = engine.create_session(async_ws)
+
+                async def on_user_transcript(text, **kwargs):
+                    _log.info("[se] user_transcript: %s", text[:120])
                     try:
                         db = get_db()
                         db["conversations"].insert({
                             "role": "user", "content": text, "channel": "realtime",
-                            "timestamp": now_iso(), "session_id": msg.get("conversation_id", ""),
+                            "timestamp": now_iso(), "session_id": "elevenlabs-se",
                             "importance": 0.5,
                         })
-                    except Exception:
-                        pass
-                    # MVP echo response
-                    reply = f"Te escuché decir: {text}. (Echo MVP — falta integrar LLM.)"
+                    except Exception: pass
+                    reply = f"Te escuché decir: {text}. (Echo MVP — fase 4.)"
                     try:
-                        ws.send(_json.dumps({"type": "response", "text": reply}))
+                        await session.send_response(reply)
                         db = get_db()
                         db["conversations"].insert({
                             "role": "assistant", "content": reply, "channel": "realtime",
-                            "timestamp": now_iso(), "session_id": msg.get("conversation_id", ""),
+                            "timestamp": now_iso(), "session_id": "elevenlabs-se",
                             "importance": 0.5,
                         })
-                    except Exception:
-                        pass
-                elif msg_type in ("ping", "keepalive"):
-                    try:
-                        ws.send(_json.dumps({"type": "pong"}))
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                    except Exception as e:
+                        _log.warning("[se] send_response err: %s", e)
+
+                session.on("user_transcript", on_user_transcript)
+                await session.run()
+            except Exception as e:
+                _log.exception("[se] session run failed: %s", e)
+
+        try:
+            _asyncio.run(_run())
+        except Exception as e:
+            _log.exception("[se] asyncio.run failed: %s", e)
 
 
 if __name__ == "__main__":
