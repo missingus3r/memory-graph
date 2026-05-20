@@ -110,11 +110,16 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError
 
 from flask import Flask, request, jsonify, g, send_file, session, redirect, make_response
+try:
+    from flask_sock import Sock
+    _SOCK_AVAILABLE = True
+except ImportError:
+    _SOCK_AVAILABLE = False
 import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.19.0"
+VERSION = "2.20.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -665,6 +670,7 @@ def init_embeddings_table():
 
 # ── Flask App ──
 app = Flask(__name__)
+_sock = Sock(app) if _SOCK_AVAILABLE else None
 app.secret_key = GRAPH_SECRET
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -4822,6 +4828,132 @@ def tool_note_add():
     with open(notas_path, "a", encoding="utf-8") as f:
         f.write(block)
     return jsonify({"status": "appended", "file": notas_path, "ts": ts, "note": "Sincronizar a Notion KB en próxima sesión Claude."})
+
+
+# ────────────────────────────────────────────────────────────────
+# ElevenLabs Speech Engine — alternativa al OpenAI Realtime
+# Flow:
+#   1. Browser pide /elevenlabs/conversation_token
+#   2. Server crea Speech Engine resource (1ª vez) y pide token via REST
+#   3. Browser usa @elevenlabs/client con conversationToken → audio WebRTC
+#   4. ElevenLabs hace STT y abre WS contra /ws/elevenlabs
+#   5. Server recibe transcript, llama LLM (placeholder: echo+context Friday)
+#   6. Server stream-ea texto de vuelta → ElevenLabs hace TTS al browser
+# ────────────────────────────────────────────────────────────────
+
+@app.route("/elevenlabs/speech_engine/create", methods=["POST"])
+def elevenlabs_speech_engine_create():
+    """Crea (o devuelve cached) Speech Engine resource en ElevenLabs vía SDK."""
+    import os as _os
+    api_key = _os.environ.get("ELEVENLABS_API_KEY", "")
+    if not api_key:
+        return jsonify({"error": "ELEVENLABS_API_KEY not set in env"}), 503
+    cached_id = _os.environ.get("ELEVENLABS_SPEECH_ENGINE_ID", "")
+    if cached_id:
+        return jsonify({"speech_engine_id": cached_id, "source": "cache_env"})
+    body = request.get_json(silent=True) or {}
+    ws_url = (body.get("ws_url") or "").strip()
+    if not ws_url:
+        return jsonify({"error": "ws_url required (e.g. wss://<ngrok>/ws/elevenlabs)"}), 400
+    name = body.get("name", "Friday Speech Engine")
+    try:
+        from elevenlabs import ElevenLabs
+        el = ElevenLabs(api_key=api_key)
+        engine = el.speech_engine.create(
+            name=name,
+            speech_engine={"ws_url": ws_url},
+        )
+        se_id = getattr(engine, "engine_id", None) or getattr(engine, "speech_engine_id", None) or getattr(engine, "id", None) or ""
+        return jsonify({"speech_engine_id": se_id, "source": "created",
+                        "name": name, "ws_url": ws_url})
+    except Exception as e:
+        return jsonify({"error": f"create failed: {e}"}), 502
+
+
+@app.route("/elevenlabs/conversation_token", methods=["POST"])
+def elevenlabs_conversation_token():
+    """Devuelve conversationToken para que el browser arranque la sesión con @elevenlabs/client."""
+    import os as _os
+    api_key = _os.environ.get("ELEVENLABS_API_KEY", "")
+    if not api_key:
+        return jsonify({"error": "ELEVENLABS_API_KEY not set"}), 503
+    body = request.get_json(silent=True) or {}
+    se_id = (body.get("speech_engine_id") or _os.environ.get("ELEVENLABS_SPEECH_ENGINE_ID") or "").strip()
+    if not se_id:
+        return jsonify({"error": "speech_engine_id required (pass in body or set ELEVENLABS_SPEECH_ENGINE_ID env)"}), 400
+    try:
+        from elevenlabs import ElevenLabs
+        el = ElevenLabs(api_key=api_key)
+        # Usa el método del SDK: conversational_ai.conversations.get_signed_url o speech_engine token
+        # El SDK expone tokens via speech_engine resource
+        try:
+            token_resp = el.speech_engine.token(speech_engine_id=se_id)
+        except AttributeError:
+            # Fallback al endpoint convai (signed_url para agents y speech engines)
+            token_resp = el.conversational_ai.conversations.get_signed_url(agent_id=se_id)
+        # Normalize response shape
+        token = (getattr(token_resp, "token", None)
+                 or getattr(token_resp, "conversation_token", None)
+                 or getattr(token_resp, "signed_url", None)
+                 or "")
+        return jsonify({"conversation_token": token, "speech_engine_id": se_id})
+    except Exception as e:
+        return jsonify({"error": f"token fetch failed: {e}"}), 502
+
+
+if _sock is not None:
+    @_sock.route("/ws/elevenlabs")
+    def ws_elevenlabs(ws):
+        """WebSocket que recibe transcripciones de ElevenLabs Speech Engine.
+        ElevenLabs envía eventos JSON (transcript user, etc). El server responde
+        con stream de texto que ElevenLabs convierte a TTS y reproduce en browser.
+
+        Minimal MVP: eco del último transcript (sin LLM) + log a conversation_log.
+        Para LLM real, conectar acá con OpenAI/Anthropic/Claude API.
+        """
+        import json as _json
+        try:
+            while True:
+                raw = ws.receive(timeout=60)
+                if raw is None:
+                    break
+                try:
+                    msg = _json.loads(raw) if isinstance(raw, str) else {}
+                except Exception:
+                    msg = {}
+                msg_type = msg.get("type") or msg.get("event") or ""
+                text = msg.get("text") or msg.get("transcript") or msg.get("content") or ""
+
+                # Log inbound user transcript
+                if msg_type in ("user_transcript", "transcript.final", "user_message") and text:
+                    try:
+                        db = get_db()
+                        db["conversations"].insert({
+                            "role": "user", "content": text, "channel": "realtime",
+                            "timestamp": now_iso(), "session_id": msg.get("conversation_id", ""),
+                            "importance": 0.5,
+                        })
+                    except Exception:
+                        pass
+                    # MVP echo response
+                    reply = f"Te escuché decir: {text}. (Echo MVP — falta integrar LLM.)"
+                    try:
+                        ws.send(_json.dumps({"type": "response", "text": reply}))
+                        db = get_db()
+                        db["conversations"].insert({
+                            "role": "assistant", "content": reply, "channel": "realtime",
+                            "timestamp": now_iso(), "session_id": msg.get("conversation_id", ""),
+                            "importance": 0.5,
+                        })
+                    except Exception:
+                        pass
+                elif msg_type in ("ping", "keepalive"):
+                    try:
+                        ws.send(_json.dumps({"type": "pong"}))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
