@@ -522,27 +522,6 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
       Costo aproximado: $0.06/min audio in + $0.24/min audio out.
     </p>
 
-    <!-- Provider switch: OpenAI Realtime vs ElevenLabs Speech Engine -->
-    <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:12px 16px;margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <span style="font-size:11px;color:#94a3b8;font-weight:600">PROVIDER:</span>
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#e2e8f0">
-        <input type="radio" name="rtProvider" value="openai" checked style="accent-color:#34d399"> OpenAI Realtime <span style="color:#64748b;font-size:10px">(WebRTC · gpt-realtime · $0.06/$0.24 min)</span>
-      </label>
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#e2e8f0">
-        <input type="radio" name="rtProvider" value="elevenlabs" style="accent-color:#f472b6"> ElevenLabs Speech Engine <span style="color:#64748b;font-size:10px">(WS server → STT/TTS · plan-based)</span>
-      </label>
-    </div>
-
-    <!-- ElevenLabs config (visible solo si provider=elevenlabs) -->
-    <div id="rtElConfig" style="display:none;background:rgba(15,23,42,0.6);border:1px solid rgba(244,114,182,0.2);border-radius:10px;padding:12px 16px;margin-bottom:12px;gap:10px;flex-wrap:wrap;align-items:center">
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-        <label style="font-size:11px;color:#94a3b8">Speech Engine ID:</label>
-        <input id="rtElEngineId" type="text" placeholder="auto-detectar (env ELEVENLABS_SPEECH_ENGINE_ID) o pegar acá" style="flex:1;min-width:260px;padding:7px 10px;border-radius:6px;border:1px solid rgba(244,114,182,0.3);background:#0f172a;color:#e2e8f0;font-size:11px;font-family:monospace">
-        <button id="rtElCreate" style="padding:7px 12px;border-radius:6px;border:1px solid rgba(244,114,182,0.4);background:rgba(244,114,182,0.1);color:#f472b6;font-size:11px;font-weight:600;cursor:pointer">+ Crear resource</button>
-      </div>
-      <p style="margin:0;color:#64748b;font-size:11px;line-height:1.4">El server expone <code style="color:#94a3b8">wss://&lt;ngrok&gt;/ws/elevenlabs</code> como WebSocket endpoint del Speech Engine. La 1ª vez clickeá "+ Crear resource" para registrar el endpoint con ElevenLabs (usa <code style="color:#94a3b8">ELEVENLABS_API_KEY</code> del .env del server) y guardar el ID. Después podés exportarlo a <code style="color:#94a3b8">ELEVENLABS_SPEECH_ENGINE_ID</code>.</p>
-    </div>
-
     <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:16px;margin-bottom:16px">
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
         <button id="rtStartBtn" style="padding:9px 18px;border-radius:8px;border:1px solid #34d399;background:rgba(52,211,153,0.15);color:#34d399;font-size:13px;font-weight:600;cursor:pointer">▶️ Start session</button>
@@ -4006,118 +3985,8 @@ setTimeout(() => {
     rtClock.textContent = '';
   }
 
-  // Provider switch logic
-  function getProvider() {
-    const r = document.querySelector('input[name="rtProvider"]:checked');
-    return r ? r.value : 'openai';
-  }
-  function applyProviderUI() {
-    const p = getProvider();
-    document.getElementById('rtElConfig').style.display = (p === 'elevenlabs') ? 'block' : 'none';
-    // hide OpenAI-specific selects when ElevenLabs
-    const openAiSelects = [document.getElementById('rtModel'), document.getElementById('rtVoice')];
-    openAiSelects.forEach(el => { if (el) el.style.display = (p === 'elevenlabs') ? 'none' : ''; });
-  }
-  document.querySelectorAll('input[name="rtProvider"]').forEach(r => r.addEventListener('change', applyProviderUI));
-  applyProviderUI();
-
-  // ─── ElevenLabs Speech Engine integration ───
-  let elConvo = null;  // @elevenlabs/client Conversation instance
-
-  async function loadElevenLabsSDK() {
-    if (window.ElevenLabsClient) return window.ElevenLabsClient;
-    return new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.type = 'module';
-      // CDN ESM build
-      s.textContent = "import * as EL from 'https://esm.sh/@elevenlabs/client@latest'; window.ElevenLabsClient = EL; window.dispatchEvent(new Event('elevenlabs-sdk-ready'));";
-      s.onerror = () => reject(new Error('Failed to load @elevenlabs/client'));
-      window.addEventListener('elevenlabs-sdk-ready', () => resolve(window.ElevenLabsClient), { once: true });
-      document.head.appendChild(s);
-      setTimeout(() => { if (!window.ElevenLabsClient) reject(new Error('SDK timeout')); }, 10000);
-    });
-  }
-
-  async function createElevenLabsResource() {
-    rtStatus.textContent = 'creating resource...';
-    rtStatus.style.color = '#fbbf24';
-    const wsUrl = window.location.origin.replace(/^http/, 'ws') + '/ws/elevenlabs';
-    try {
-      const r = await fetch(API + '/elevenlabs/speech_engine/create', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ ws_url: wsUrl, name: 'Friday Memory Graph SE' })
-      });
-      const d = await r.json();
-      if (d.error) { rtStatus.textContent = 'create error'; alert('Error: ' + d.error); return; }
-      document.getElementById('rtElEngineId').value = d.speech_engine_id || '';
-      rtStatus.textContent = 'resource created: ' + (d.speech_engine_id || '?');
-      rtStatus.style.color = '#34d399';
-    } catch (e) {
-      rtStatus.textContent = 'create failed';
-      alert('Error: ' + e.message);
-    }
-  }
-  document.getElementById('rtElCreate').addEventListener('click', createElevenLabsResource);
-
-  async function startElevenLabsSession() {
-    rtStatus.textContent = 'loading SDK...';
-    rtStatus.style.color = '#fbbf24';
-    let EL;
-    try { EL = await loadElevenLabsSDK(); }
-    catch (e) { rtStatus.textContent = 'SDK error'; alert(e.message); return; }
-    rtStatus.textContent = 'fetching token...';
-    const seId = document.getElementById('rtElEngineId').value.trim();
-    try {
-      const r = await fetch(API + '/elevenlabs/conversation_token', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ speech_engine_id: seId })
-      });
-      const d = await r.json();
-      if (d.error || !d.conversation_token) {
-        rtStatus.textContent = 'token error';
-        alert('Token error: ' + (d.error || 'no token'));
-        return;
-      }
-      rtStatus.textContent = 'connecting...';
-      const Conversation = EL.Conversation;
-      elConvo = await Conversation.startSession({
-        conversationToken: d.conversation_token,
-        onConnect: () => { rtStatus.textContent = 'connected (ElevenLabs)'; rtStatus.style.color = '#34d399'; rtStartBtn.disabled = true; rtStartBtn.style.opacity = 0.4; rtStopBtn.disabled = false; rtStopBtn.style.opacity = 1; },
-        onDisconnect: () => { rtStatus.textContent = 'disconnected'; rtStatus.style.color = '#64748b'; rtStartBtn.disabled = false; rtStartBtn.style.opacity = 1; rtStopBtn.disabled = true; rtStopBtn.style.opacity = 0.4; elConvo = null; },
-        onMessage: (m) => {
-          const role = m.source === 'user' ? 'user' : 'assistant';
-          const txt = (m.message || '').toString();
-          if (!txt) return;
-          const div = document.createElement('div');
-          div.style.cssText = 'padding:6px 10px;border-radius:6px;margin-bottom:6px;background:' + (role==='user'?'rgba(96,165,250,0.08)':'rgba(244,114,182,0.08)') + ';color:' + (role==='user'?'#60a5fa':'#f472b6');
-          div.innerHTML = '<b>' + role + ':</b> ' + txt;
-          rtTranscript.appendChild(div);
-          rtTranscript.scrollTop = rtTranscript.scrollHeight;
-          fetch(API + '/realtime/log', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role, content: txt, session_id: 'elevenlabs-se'})}).catch(()=>{});
-        },
-        onError: (e) => { rtStatus.textContent = 'error: ' + (e.message || e); rtStatus.style.color = '#f87171'; }
-      });
-    } catch (e) {
-      rtStatus.textContent = 'session error';
-      alert(e.message);
-    }
-  }
-
-  function stopElevenLabsSession() {
-    if (elConvo) { elConvo.endSession(); elConvo = null; }
-  }
-
-  // Wrap Start/Stop to dispatch by provider
-  rtStartBtn.addEventListener('click', () => {
-    if (getProvider() === 'elevenlabs') startElevenLabsSession();
-    else startSession();
-  });
-  rtStopBtn.addEventListener('click', () => {
-    if (getProvider() === 'elevenlabs') stopElevenLabsSession();
-    else stopSession();
-  });
+  rtStartBtn.addEventListener('click', startSession);
+  rtStopBtn.addEventListener('click', stopSession);
   rtTextSend.addEventListener('click', sendText);
   rtTextInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendText();
@@ -4127,10 +3996,7 @@ setTimeout(() => {
   });
 
   // Cleanup if user navigates away from the tab
-  window.addEventListener('beforeunload', () => {
-    if (rtPc) stopSession();
-    if (elConvo) stopElevenLabsSession();
-  });
+  window.addEventListener('beforeunload', () => { if (rtPc) stopSession(); });
 })();
 </script>
 </body>
