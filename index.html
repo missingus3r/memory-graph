@@ -4082,13 +4082,8 @@ setTimeout(() => {
       }
       rtStatus.textContent = 'connecting...';
       const Conversation = EL.Conversation;
-      // El API devuelve un signed URL (wss://...), no un JWT — se pasa como signedUrl
-      const isSignedUrl = (d.conversation_token || '').startsWith('wss://') || (d.conversation_token || '').startsWith('ws://');
-      const sessionConfig = isSignedUrl
-        ? { signedUrl: d.conversation_token }
-        : { conversationToken: d.conversation_token };
       elConvo = await Conversation.startSession({
-        ...sessionConfig,
+        conversationToken: d.conversation_token,
         onConnect: () => { rtStatus.textContent = 'connected (ElevenLabs)'; rtStatus.style.color = '#34d399'; rtStartBtn.disabled = true; rtStartBtn.style.opacity = 0.4; rtStopBtn.disabled = false; rtStopBtn.style.opacity = 1; },
         onDisconnect: () => { rtStatus.textContent = 'disconnected'; rtStatus.style.color = '#64748b'; rtStartBtn.disabled = false; rtStartBtn.style.opacity = 1; rtStopBtn.disabled = true; rtStopBtn.style.opacity = 0.4; elConvo = null; },
         onMessage: (m) => {
