@@ -1051,6 +1051,8 @@ def memory_delete(mem_id):
 
 @app.route("/memory/recall")
 def memory_recall():
+    """v2 (2.20.0): hybrid recall — FTS5 + embeddings + recency boost via RRF.
+    Response shape backward-compatible; adds recall_score / match per memory."""
     db = get_db()
     topic = request.args.get("topic", "")
     limit = safe_int(request.args.get("limit", "10"), default=10)
@@ -1059,31 +1061,136 @@ def memory_recall():
         return jsonify({"error": "topic parameter required"}), 400
 
     results = {"memories": [], "conversations": []}
+    now = datetime.datetime.now(datetime.timezone.utc)
 
-    try:
-        mem_rows = db.execute("""
-            SELECT m.id, m.type, m.name, m.content, m.updated_at
-            FROM memories m JOIN memories_fts fts ON m.id = fts.rowid
-            WHERE memories_fts MATCH ? LIMIT ?
-        """, [topic, limit]).fetchall()
-        results["memories"] = [{"id": r[0], "type": r[1], "name": r[2],
-                                 "content": r[3], "updated_at": r[4]} for r in mem_rows]
-    except Exception:
-        pass
+    def fts_query(sql, args):
+        try:
+            return db.execute(sql, args).fetchall()
+        except Exception:
+            # FTS syntax error (quotes, operators) — retry with each token quoted
+            try:
+                sanitized = " OR ".join(
+                    '"' + t.replace('"', '') + '"' for t in topic.split() if t.strip('"\''))
+                return db.execute(sql, [sanitized] + args[1:]) .fetchall()
+            except Exception:
+                return []
 
-    try:
-        conv_rows = db.execute("""
-            SELECT c.id, c.timestamp, c.role, c.content, c.channel
-            FROM conversations c JOIN conversations_fts fts ON c.id = fts.rowid
-            WHERE conversations_fts MATCH ?
-            ORDER BY c.timestamp DESC LIMIT ?
-        """, [topic, limit]).fetchall()
-        results["conversations"] = [{"id": r[0], "timestamp": r[1], "role": r[2],
-                                      "content": r[3], "channel": r[4]} for r in conv_rows]
-    except Exception:
-        pass
+    # --- memories: FTS ranks ---
+    fts_ranks = {}
+    mem_meta = {}
+    rows = fts_query("""
+        SELECT m.id, m.type, m.name, m.content, m.updated_at
+        FROM memories m JOIN memories_fts fts ON m.id = fts.rowid
+        WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?
+    """, [topic, limit * 3])
+    for i, r in enumerate(rows):
+        fts_ranks[r[0]] = i + 1
+        mem_meta[r[0]] = r
+
+    # --- memories: semantic ranks (corpus chico, full scan barato) ---
+    sem_ranks, sem_scores = {}, {}
+    query_emb = generate_embedding(topic)
+    if query_emb:
+        try:
+            emb_rows = db.execute(
+                "SELECT source_id, embedding FROM embeddings WHERE source_type = 'memory'"
+            ).fetchall()
+            scored = []
+            for sid, blob in emb_rows:
+                emb = unpack_embedding(blob)
+                if emb:
+                    scored.append((sid, cosine_similarity(query_emb, emb)))
+            scored.sort(key=lambda x: x[1], reverse=True)
+            for i, (sid, score) in enumerate(scored[:limit * 3]):
+                if score < 0.3:
+                    break
+                sem_ranks[sid] = i + 1
+                sem_scores[sid] = score
+        except Exception:
+            pass
+
+    # --- fusion RRF + recency boost ---
+    all_ids = set(fts_ranks) | set(sem_ranks)
+    missing = [i for i in all_ids if i not in mem_meta]
+    if missing:
+        ph = ",".join("?" for _ in missing)
+        for r in db.execute(
+                f"SELECT id, type, name, content, updated_at FROM memories WHERE id IN ({ph})",
+                missing).fetchall():
+            mem_meta[r[0]] = r
+
+    fused = []
+    for mid in all_ids:
+        r = mem_meta.get(mid)
+        if not r:
+            continue
+        rrf = 1.0 / (60 + fts_ranks.get(mid, 999)) + 1.0 / (60 + sem_ranks.get(mid, 999))
+        recency = 1.0
+        try:
+            ts = datetime.datetime.fromisoformat((r[4] or "").replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
+            age_days = max(0.0, (now - ts).total_seconds() / 86400.0)
+            recency = 1.0 + 0.25 * (0.5 ** (age_days / 90.0))
+        except Exception:
+            pass
+        match = ("fts+semantic" if mid in fts_ranks and mid in sem_ranks
+                 else "fts" if mid in fts_ranks else "semantic")
+        fused.append({"id": r[0], "type": r[1], "name": r[2], "content": r[3],
+                      "updated_at": r[4], "recall_score": round(rrf * recency, 6),
+                      "semantic_score": round(sem_scores.get(mid, 0), 4),
+                      "match": match})
+    fused.sort(key=lambda x: x["recall_score"], reverse=True)
+    results["memories"] = fused[:limit]
+
+    # --- conversations: FTS por recencia (sin cambios de contrato) ---
+    conv_rows = fts_query("""
+        SELECT c.id, c.timestamp, c.role, c.content, c.channel
+        FROM conversations c JOIN conversations_fts fts ON c.id = fts.rowid
+        WHERE conversations_fts MATCH ?
+        ORDER BY c.timestamp DESC LIMIT ?
+    """, [topic, limit])
+    results["conversations"] = [{"id": r[0], "timestamp": r[1], "role": r[2],
+                                  "content": r[3], "channel": r[4]} for r in conv_rows]
 
     return jsonify(results)
+
+
+@app.route("/memory/dupes")
+def memory_dupes():
+    """v2.20.0: report-only — pares de memorias con alta similitud semántica.
+    NO borra ni modifica nada; devuelve candidatos para revisión humana.
+    Params: threshold (default 0.88), limit (default 50)."""
+    db = get_db()
+    threshold = float(request.args.get("threshold", "0.88") or 0.88)
+    limit = safe_int(request.args.get("limit", "50"), default=50)
+
+    rows = db.execute("""
+        SELECT e.source_id, e.embedding, m.name, m.type, m.updated_at
+        FROM embeddings e JOIN memories m ON m.id = e.source_id
+        WHERE e.source_type = 'memory'
+    """).fetchall()
+    unpacked = []
+    for sid, blob, name, mtype, updated in rows:
+        emb = unpack_embedding(blob)
+        if emb:
+            unpacked.append((sid, emb, name, mtype, updated))
+
+    pairs = []
+    for i in range(len(unpacked)):
+        for j in range(i + 1, len(unpacked)):
+            score = cosine_similarity(unpacked[i][1], unpacked[j][1])
+            if score >= threshold:
+                pairs.append({
+                    "a": {"id": unpacked[i][0], "name": unpacked[i][2],
+                          "type": unpacked[i][3], "updated_at": unpacked[i][4]},
+                    "b": {"id": unpacked[j][0], "name": unpacked[j][2],
+                          "type": unpacked[j][3], "updated_at": unpacked[j][4]},
+                    "similarity": round(score, 4)})
+    pairs.sort(key=lambda x: x["similarity"], reverse=True)
+    return jsonify({"count": len(pairs), "threshold": threshold,
+                    "note": "report-only, nada se borra automáticamente",
+                    "pairs": pairs[:limit]})
 
 
 @app.route("/entity", methods=["POST"])
