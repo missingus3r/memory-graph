@@ -387,6 +387,11 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
       <p style="color:#64748b;font-size:12px;margin:0 0 16px 0">Pulso actual del sistema — un vistazo rápido antes de bajar a cada subsistema.</p>
       <div id="brainOverview" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:16px"></div>
       <div id="brainKpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:18px"></div>
+      <!-- v2.20: Loop Health (staleness por tabla core, /harness/health) -->
+      <div id="brainLoopHealth" style="padding:14px;border-radius:10px;border:1px solid rgba(96,165,250,0.18);background:rgba(96,165,250,0.04);margin-bottom:14px">
+        <h3 style="color:#60a5fa;font-size:13px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:0.5px;display:flex;justify-content:space-between;align-items:center"><span>🩺 Loop Health (v2.20)</span><span id="loopHealthStatus" style="font-size:11px;font-weight:400"></span></h3>
+        <div id="loopHealthBody" style="display:flex;flex-wrap:wrap;gap:6px"><div style="color:#64748b;font-size:11px">Cargando...</div></div>
+      </div>
       <!-- Phase 4 #3: Closed Loops panel -->
       <div id="brainClosedLoops" style="padding:14px;border-radius:10px;border:1px solid rgba(52,211,153,0.18);background:rgba(52,211,153,0.04)">
         <h3 style="color:#34d399;font-size:13px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:0.5px">🔁 Closed Loops (v2.13)</h3>
@@ -425,6 +430,14 @@ body{background:#0a0a0f;color:#e2e8f0;font-family:'Inter',system-ui,sans-serif;o
           <h3 onclick="toggleBrainCollapse('skills')" style="color:#22c55e;font-size:13px;font-weight:700;margin:0 0 8px 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none"><span>⚙️ Procedimental — Skills <span id="cntSkills" style="color:#64748b;font-weight:400;font-size:11px"></span></span><span id="chevSkills" style="color:#64748b;font-size:11px">▼</span></h3>
           <div id="wrapSkills"><div id="memProcedural" style="display:grid;gap:6px"></div></div>
         </div>
+      </div>
+      <!-- v2.20: detector de memorias duplicadas (report-only) -->
+      <div style="margin-top:18px;padding:12px 14px;border-radius:10px;border:1px solid rgba(244,114,182,0.2);background:rgba(244,114,182,0.03)">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <h3 style="color:#f472b6;font-size:13px;font-weight:700;margin:0">🪞 Posibles duplicados <span style="color:#64748b;font-weight:400;font-size:11px">(report-only, nada se borra solo)</span></h3>
+          <button class="usage-btn-refresh" onclick="loadMemoryDupes()" style="font-size:11px">Analizar</button>
+        </div>
+        <div id="memDupes" style="display:grid;gap:6px;margin-top:10px"><div style="color:#64748b;font-size:11px">Tocá "Analizar" para buscar pares de memorias con alta similitud semántica (umbral 0.88).</div></div>
       </div>
     </section>
 
@@ -1853,6 +1866,7 @@ async function renderBrain() {
   _renderBrainSubNav();
   // Always render overview + KPIs (cheap and what users land on)
   _renderBrainOverviewAndKpis();
+  _renderLoopHealth();            // v2.20
   _renderClosedLoops();           // Phase 4 #3
   _renderHarnessActivity();
   _startHarnessLiveWatch();       // Phase 4 #8 (polling fallback)
@@ -2500,6 +2514,26 @@ function toggleLoopRow(key) {
   if (row) row.classList.toggle('expanded', window._loopExpanded[key]);
 }
 
+async function _renderLoopHealth() {
+  const body = document.getElementById('loopHealthBody');
+  const status = document.getElementById('loopHealthStatus');
+  if (!body) return;
+  try {
+    const h = await fetch('/harness/health').then(r => r.json());
+    if (status) status.innerHTML = h.status === 'ok'
+      ? '<span style="color:#34d399">🟢 ok</span>'
+      : `<span style="color:#f59e0b">⚠️ ${h.stale_count} stale</span> · <span style="color:#94a3b8">predictions abiertas: ${h.predictions_open}</span>`;
+    body.innerHTML = (h.loops || []).map(l => {
+      if (l.error) return `<span class="lh-chip" style="border-color:rgba(239,68,68,0.4);color:#ef4444">${escapeHtml(l.table)} ⚠ err</span>`;
+      const age = l.age_days == null ? '∅' : (l.age_days < 1 ? `${Math.round(l.age_days*24)}h` : `${Math.round(l.age_days)}d`);
+      const c = l.stale ? '#ef4444' : '#34d399';
+      return `<span class="lh-chip" title="último write: ${escapeHtml(String(l.last_write||'nunca'))} · umbral ${l.threshold_days}d · ${l.count} filas" style="display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:14px;font-size:10px;font-family:monospace;border:1px solid ${c}44;background:${c}11;color:${c}">${l.stale?'●':'○'} ${escapeHtml(l.table)} <b>${age}</b></span>`;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<div style="color:#ef4444;font-size:11px">Error: ${e.message}</div>`;
+  }
+}
+
 async function _renderClosedLoops() {
   const body = document.getElementById('brainLoopsBody');
   if (!body) return;
@@ -2588,6 +2622,28 @@ async function _renderClosedLoops() {
     }).join('');
   } catch (e) {
     body.innerHTML = `<div style="color:#ef4444;font-size:11px">Error: ${e.message}</div>`;
+  }
+}
+
+async function loadMemoryDupes() {
+  const el = document.getElementById('memDupes');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#64748b;font-size:11px">Analizando embeddings…</div>';
+  try {
+    const d = await fetch('/memory/dupes?threshold=0.88&limit=40').then(r => r.json());
+    if (!d.pairs || !d.pairs.length) {
+      el.innerHTML = '<div style="color:#34d399;font-size:11px">✓ Sin duplicados por encima del umbral.</div>';
+      return;
+    }
+    el.innerHTML = d.pairs.map(p => `
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.05);font-size:11px">
+        <span style="color:#f472b6;font-family:monospace;font-weight:700;min-width:46px">${(p.similarity*100).toFixed(1)}%</span>
+        <span style="color:#e2e8f0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="#${p.a.id} (${escapeHtml(p.a.type||'')})">${escapeHtml(p.a.name)}</span>
+        <span style="color:#64748b">≈</span>
+        <span style="color:#e2e8f0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="#${p.b.id} (${escapeHtml(p.b.type||'')})">${escapeHtml(p.b.name)}</span>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = `<div style="color:#ef4444;font-size:11px">Error: ${e.message}</div>`;
   }
 }
 
