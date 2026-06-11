@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.20.0"
+VERSION = "2.20.1"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -1513,7 +1513,7 @@ _LOOP_HEALTH_TABLES = {
     "metrics": ("timestamp", 2),
     "sandbox_executions": ("created_at", 14),
     "proposals": ("updated_at", 14),
-    "skills": ("updated_at", 14),
+    "skills": ("created_at", 14),
     "experiments": ("started_at", 30),
     "preferences": ("created_at", 14),
     "entities": ("updated_at", 14),
