@@ -2497,6 +2497,78 @@ def goal_create():
     return jsonify({"status": "created", "goal": _goal_row_to_dict(created)})
 
 
+@app.route("/goal/auto", methods=["POST"])
+def goal_auto():
+    """v2.20.0: revive el goal engine — crea goals automáticos desde
+    (a) proposals pending y (b) insights severity high/critical de los últimos
+    14 días, cada uno con un plan skeleton (investigar→ejecutar→verificar).
+    Idempotente: marca [auto:proposal:N]/[auto:insight:N] en description y
+    no duplica. No modifica ni borra nada existente."""
+    db = get_db()
+    ts = now_iso()
+    created = []
+
+    def _has_goal(marker):
+        return db.execute(
+            "SELECT 1 FROM goals WHERE description LIKE ? LIMIT 1",
+            [f"%{marker}%"]).fetchone() is not None
+
+    def _mk_goal(title, description, utility, risk_tier="low"):
+        goal_id = f"g_{uuid.uuid4().hex[:8]}"
+        db["goals"].insert({
+            "goal_id": goal_id, "title": title[:140], "description": description,
+            "utility": utility, "deadline": "", "constraints": "[]",
+            "success_criteria": "[]", "subgoals": "[]", "risk_tier": risk_tier,
+            "status": "active", "cost_estimated": "", "evidence": "[]",
+            "progress": 0.0, "autonomy_level": 0, "parent_goal": "",
+            "created_at": ts, "updated_at": ts})
+        plan_id = f"p_{uuid.uuid4().hex[:8]}"
+        db["plan_tree"].insert({
+            "plan_id": plan_id, "node_id": f"{plan_id}_root", "parent_node": "",
+            "goal_id": goal_id, "node_type": "goal", "title": title[:140],
+            "description": description, "tool": "", "expected_result": "",
+            "exit_condition": "goal completado y verificado", "rollback": "",
+            "status": "pending", "depth": 0, "order_idx": 0, "result": "",
+            "created_at": ts, "updated_at": ts})
+        for idx, (step, tool) in enumerate(
+                [("Investigar contexto y causa", "Read/Bash"),
+                 ("Ejecutar el cambio o decisión", "Edit/curl"),
+                 ("Verificar resultado y cerrar", "curl/test")]):
+            db["plan_tree"].insert({
+                "plan_id": plan_id, "node_id": f"{plan_id}_n{idx}",
+                "parent_node": f"{plan_id}_root", "goal_id": goal_id,
+                "node_type": "action", "title": step, "description": "",
+                "tool": tool, "expected_result": "", "exit_condition": "",
+                "rollback": "", "status": "pending", "depth": 1,
+                "order_idx": idx, "result": "", "created_at": ts,
+                "updated_at": ts})
+        return goal_id, plan_id
+
+    for pid, fpath, desc in db.execute(
+            "SELECT id, file_path, description FROM proposals WHERE status = 'pending'").fetchall():
+        marker = f"[auto:proposal:{pid}]"
+        if _has_goal(marker):
+            continue
+        gid, plid = _mk_goal(
+            f"Resolver proposal #{pid}: {fpath}",
+            f"{marker} {desc or ''}".strip(), 0.6)
+        created.append({"source": f"proposal:{pid}", "goal_id": gid, "plan_id": plid})
+
+    for iid, title, severity in db.execute(
+            "SELECT id, title, severity FROM insights WHERE severity IN ('high','critical') "
+            "AND created_at > datetime('now','-14 days')").fetchall():
+        marker = f"[auto:insight:{iid}]"
+        if _has_goal(marker):
+            continue
+        gid, plid = _mk_goal(
+            f"Atender insight #{iid}: {title or '(sin título)'}",
+            f"{marker} severity={severity}", 0.7,
+            risk_tier="medium" if severity == "critical" else "low")
+        created.append({"source": f"insight:{iid}", "goal_id": gid, "plan_id": plid})
+
+    return jsonify({"status": "ok", "created": created, "count": len(created)})
+
+
 @app.route("/goal/<goal_id>", methods=["GET"])
 def goal_get(goal_id):
     db = get_db()
