@@ -1880,13 +1880,23 @@ def insight_create():
     db = get_db()
     data = request.json or {}
     ts = now_iso()
+    # v2.20.0: nunca persistir insights sin título — derivarlo del contenido.
+    # Insight 100% vacío (sin title/content/pattern/evidence) → 400: eso es un
+    # bug del caller, no un insight (pasó 24 veces en abril 2026).
+    title = (data.get("title") or "").strip()
+    fallback = (data.get("content") or data.get("pattern")
+                or data.get("evidence") or "").strip()
+    if not title and not fallback:
+        return jsonify({"error": "insight vacío: se requiere title o content/pattern/evidence"}), 400
+    if not title:
+        title = fallback[:80] + ("…" if len(fallback) > 80 else "")
     db["insights"].insert({
         "type": data.get("type", ""),
         "pattern": data.get("pattern", ""),
         "evidence": data.get("evidence", ""),
         "confidence": clamp_float(data.get("confidence", 0.5)),
         "valid_until": data.get("valid_until"),
-        "title": data.get("title", ""),
+        "title": title,
         "content": data.get("content", ""),
         "severity": data.get("severity", ""),
         "category": data.get("category", ""),
@@ -4133,6 +4143,61 @@ def metric_record():
     })
     return jsonify({"status": "recorded", "name": name, "value": value,
                     "known": name in _KNOWN_METRICS})
+
+
+@app.route("/harness/daily_metrics", methods=["POST"])
+def harness_daily_metrics():
+    """v2.20.0: computa y registra las métricas diarias del harness de forma
+    determinística desde la DB (reemplaza el proxy por keywords del cron §4).
+    - hallucination_rate: verifications con passed=0 / total (24h). Si no hubo
+      verifications, null (no se registra un 0 falso).
+    - corrections_count: mensajes user 24h con patrón de corrección.
+    - goals_completed_today, goals_active.
+    - calibration_gap_7d: avg |confidence - outcome| de predictions resueltas 7d.
+    Registra cada métrica no-null en /metric y devuelve el resumen."""
+    db = get_db()
+    out = {}
+
+    row = db.execute(
+        "SELECT COUNT(*), SUM(CASE WHEN passed IN (0,'0','false','False') THEN 1 ELSE 0 END) "
+        "FROM verifications WHERE created_at > datetime('now','-1 day')").fetchone()
+    total_ver, failed_ver = row[0] or 0, row[1] or 0
+    out["verifications_24h"] = total_ver
+    out["hallucination_rate"] = round(failed_ver / total_ver, 4) if total_ver else None
+
+    corr = db.execute(
+        "SELECT COUNT(*) FROM conversations WHERE role='user' "
+        "AND timestamp > datetime('now','-1 day') AND ("
+        "content LIKE 'no,%' OR content LIKE 'no era%' OR content LIKE 'mal%' "
+        "OR content LIKE '%te equivocaste%' OR content LIKE '%está mal%' "
+        "OR content LIKE '%no es así%' OR content LIKE '%otra vez%')").fetchone()
+    out["corrections_count"] = corr[0] or 0
+
+    out["goals_completed_today"] = db.execute(
+        "SELECT COUNT(*) FROM goals WHERE status='completed' "
+        "AND updated_at > datetime('now','-1 day')").fetchone()[0]
+    out["goals_active"] = db.execute(
+        "SELECT COUNT(*) FROM goals WHERE status IN ('active','pending','in_progress')").fetchone()[0]
+
+    row = db.execute(
+        "SELECT AVG(ABS(calibration)), COUNT(*) FROM wm_predictions "
+        "WHERE resolved=1 AND resolved_at > datetime('now','-7 days') "
+        "AND calibration IS NOT NULL").fetchone()
+    out["calibration_gap_7d"] = round(row[0], 4) if row[0] is not None else None
+    out["predictions_resolved_7d"] = row[1] or 0
+    out["predictions_open"] = db.execute(
+        "SELECT COUNT(*) FROM wm_predictions WHERE resolved=0 OR resolved IS NULL").fetchone()[0]
+
+    ts = now_iso()
+    recorded = []
+    for name in ("hallucination_rate", "corrections_count", "goals_completed_today",
+                 "goals_active", "calibration_gap_7d", "predictions_open"):
+        if out.get(name) is not None:
+            db["metrics"].insert({"name": name, "value": float(out[name]), "unit": "",
+                                  "context": "harness/daily_metrics", "tags": "[]",
+                                  "timestamp": ts})
+            recorded.append(name)
+    return jsonify({"status": "ok", "computed": out, "recorded": recorded})
 
 
 @app.route("/metric/list", methods=["GET"])
