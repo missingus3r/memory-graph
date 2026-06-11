@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.19.0"
+VERSION = "2.20.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -1497,6 +1497,71 @@ def embeddings_reindex():
 
     threading.Thread(target=_reindex, daemon=True).start()
     return jsonify({"status": "ok", "message": "reindexing started"})
+
+
+_LOOP_HEALTH_TABLES = {
+    # tabla: (columna timestamp, días para considerarla stale)
+    "conversations": ("timestamp", 2),
+    "memories": ("updated_at", 7),
+    "reflections": ("created_at", 2),
+    "insights": ("created_at", 4),
+    "goals": ("updated_at", 7),
+    "plan_tree": ("updated_at", 7),
+    "wm_predictions": ("created_at", 7),
+    "world_model": ("updated_at", 4),
+    "verifications": ("created_at", 4),
+    "metrics": ("timestamp", 2),
+    "sandbox_executions": ("created_at", 14),
+    "proposals": ("updated_at", 14),
+    "skills": ("updated_at", 14),
+    "experiments": ("started_at", 30),
+    "preferences": ("created_at", 14),
+    "entities": ("updated_at", 14),
+    "capabilities": ("updated_at", 7),
+}
+
+
+@app.route("/harness/health")
+def harness_health():
+    """v2.20.0: salud de los loops del harness — última escritura por tabla
+    core + flag de staleness con umbral por tabla. Lo consulta el heartbeat §3
+    y el panel Loop Health del dashboard."""
+    db = get_db()
+    now = datetime.datetime.now(datetime.timezone.utc)
+    loops = []
+    stale_count = 0
+    for table, (col, max_days) in _LOOP_HEALTH_TABLES.items():
+        try:
+            last = db.execute(f"SELECT MAX({col}) FROM {table}").fetchone()[0]
+            count = db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        except Exception as e:
+            loops.append({"table": table, "error": str(e)})
+            continue
+        age_days = None
+        stale = last is None
+        if last:
+            try:
+                ts = datetime.datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=datetime.timezone.utc)
+                age_days = round((now - ts).total_seconds() / 86400.0, 2)
+                stale = age_days > max_days
+            except Exception:
+                stale = True
+        if stale:
+            stale_count += 1
+        loops.append({"table": table, "count": count, "last_write": last,
+                      "age_days": age_days, "threshold_days": max_days,
+                      "stale": stale})
+    loops.sort(key=lambda x: (not x.get("stale", True), -(x.get("age_days") or 0)))
+    open_preds = db.execute(
+        "SELECT COUNT(*) FROM wm_predictions WHERE resolved=0 OR resolved IS NULL").fetchone()[0]
+    return jsonify({
+        "status": "degraded" if stale_count else "ok",
+        "stale_count": stale_count,
+        "predictions_open": open_preds,
+        "checked_at": now.isoformat(),
+        "loops": loops})
 
 
 @app.route("/health")
