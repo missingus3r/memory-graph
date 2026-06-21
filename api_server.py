@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.20.1"
+VERSION = "2.21.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -201,6 +201,10 @@ def init_db():
         "ALTER TABLE insights ADD COLUMN content TEXT DEFAULT ''",
         "ALTER TABLE insights ADD COLUMN severity TEXT DEFAULT ''",
         "ALTER TABLE insights ADD COLUMN category TEXT DEFAULT ''",
+        # v2.21: insights resolvibles — cerrar atendidos para que no se acumulen
+        "ALTER TABLE insights ADD COLUMN resolved INTEGER DEFAULT 0",
+        "ALTER TABLE insights ADD COLUMN resolution TEXT DEFAULT ''",
+        "ALTER TABLE insights ADD COLUMN resolved_at TEXT",
         "ALTER TABLE world_model ADD COLUMN provenance TEXT DEFAULT '[]'",
         "ALTER TABLE world_model ADD COLUMN last_verified TEXT",
         # v2.13: calibration loop — store both raw user-supplied and offset-adjusted confidence
@@ -1990,13 +1994,25 @@ def insight_active():
 def insight_list():
     db = get_db()
     limit = safe_int(request.args.get("limit", "100"), default=100)
-    rows = db.execute(
-        "SELECT id, type, pattern, evidence, confidence, valid_until, created_at, title, content, severity, category FROM insights ORDER BY created_at DESC LIMIT ?",
-        [limit]
-    ).fetchall()
+    resolved_arg = request.args.get("resolved")
+    cols = ("id, type, pattern, evidence, confidence, valid_until, created_at, "
+            "title, content, severity, category, COALESCE(resolved,0), resolution, resolved_at")
+    if resolved_arg is not None:
+        # parse directo: safe_int clampea a min_val=1, no sirve para un flag 0/1
+        resolved_val = 1 if str(resolved_arg).strip().lower() in ("1", "true", "yes") else 0
+        rows = db.execute(
+            f"SELECT {cols} FROM insights WHERE COALESCE(resolved,0) = ? ORDER BY created_at DESC LIMIT ?",
+            [resolved_val, limit]
+        ).fetchall()
+    else:
+        rows = db.execute(
+            f"SELECT {cols} FROM insights ORDER BY created_at DESC LIMIT ?",
+            [limit]
+        ).fetchall()
     results = [{"id": r[0], "type": r[1], "pattern": r[2], "evidence": r[3],
                 "confidence": r[4], "valid_until": r[5], "created_at": r[6],
-                "title": r[7], "content": r[8], "severity": r[9], "category": r[10]}
+                "title": r[7], "content": r[8], "severity": r[9], "category": r[10],
+                "resolved": r[11], "resolution": r[12], "resolved_at": r[13]}
                for r in rows]
     return jsonify({"count": len(results), "results": results})
 
@@ -2024,6 +2040,22 @@ def insight_delete(id):
         return jsonify({"error": f"Insight {id} not found"}), 404
     db.execute("DELETE FROM insights WHERE id = ?", [id])
     return jsonify({"status": "deleted", "id": id})
+
+
+@app.route("/insight/<int:id>/resolve", methods=["POST"])
+def insight_resolve(id):
+    db = get_db()
+    existing = db.execute("SELECT id FROM insights WHERE id = ?", [id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Insight {id} not found"}), 404
+    data = request.json or {}
+    resolution = (data.get("resolution") or "").strip()
+    ts = now_iso()
+    db.execute(
+        "UPDATE insights SET resolved = 1, resolution = ?, resolved_at = ? WHERE id = ?",
+        [resolution, ts, id]
+    )
+    return jsonify({"status": "resolved", "id": id, "resolved_at": ts})
 
 
 # -- Proposals --
