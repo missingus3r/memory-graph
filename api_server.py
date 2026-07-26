@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.21.0"
+VERSION = "2.21.1"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -1516,7 +1516,9 @@ _LOOP_HEALTH_TABLES = {
     "verifications": ("created_at", 4),
     "metrics": ("timestamp", 2),
     "sandbox_executions": ("created_at", 14),
-    "proposals": ("updated_at", 14),
+    # updated_at solo se setea al aprobar/rechazar: sin COALESCE, una proposal
+    # recién creada no cuenta como escritura y el loop figura stale (bug #25)
+    "proposals": ("COALESCE(updated_at, created_at)", 14),
     "skills": ("created_at", 14),
     "experiments": ("started_at", 30),
     "preferences": ("created_at", 14),
