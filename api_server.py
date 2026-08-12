@@ -4365,7 +4365,9 @@ def harness_daily_metrics():
     determinística desde la DB (reemplaza el proxy por keywords del cron §4).
     - hallucination_rate: verifications con passed=0 / total (24h). Si no hubo
       verifications, null (no se registra un 0 falso).
-    - corrections_count: mensajes user 24h con patrón de corrección.
+    - corrections_count: PROXY por keywords sobre mensajes user 24h. Cota
+      INFERIOR: no detecta correcciones que dependen del turno anterior
+      (imperativo correctivo sin negación). Ver proposals #32/#48.
     - goals_completed_today, goals_active.
     - calibration_gap_7d: avg |confidence - outcome| de predictions resueltas 7d.
     Registra cada métrica no-null en /metric y devuelve el resumen."""
@@ -4383,12 +4385,22 @@ def harness_daily_metrics():
     out["verifications_24h"] = total_ver
     out["hallucination_rate"] = round(failed_ver / total_ver, 4) if total_ver else None
 
+    # proposals #32/#48: el set viejo sólo matcheaba negaciones explícitas en
+    # español, y Bruno corrige por pregunta ("como que 23:57? yo tengo las 21:01")
+    # o por imperativo ("quitalo de notas y ponelo en notion"). Los dos casos
+    # citados dieron corrections_count=0 el día que ocurrieron. Sigue siendo un
+    # PROXY por keywords y subestima: no detecta correcciones que dependen del
+    # turno anterior. Tratarla como cota inferior, no como el número real.
     corr = db.execute(
         "SELECT COUNT(*) FROM conversations WHERE role='user' "
         "AND timestamp > datetime('now','-1 day') AND ("
         "content LIKE 'no,%' OR content LIKE 'no era%' OR content LIKE 'mal%' "
         "OR content LIKE '%te equivocaste%' OR content LIKE '%está mal%' "
-        "OR content LIKE '%no es así%' OR content LIKE '%otra vez%')").fetchone()
+        "OR content LIKE '%no es así%' OR content LIKE '%otra vez%' "
+        "OR content LIKE '%como que%' OR content LIKE '%cómo que%' "
+        "OR content LIKE '%eso no%' OR content LIKE '%en realidad%' "
+        "OR content LIKE '%no era eso%' OR content LIKE '%revisá%' "
+        "OR content LIKE '%fijate%' OR content LIKE '%corregí%')").fetchone()
     out["corrections_count"] = corr[0] or 0
 
     out["goals_completed_today"] = db.execute(
