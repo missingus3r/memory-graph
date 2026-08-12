@@ -4513,6 +4513,14 @@ def cron_active_upsert():
                 [row["label"], row["cron_expr"], row["prompt_preview"], ts, jid])
         else:
             db["active_crons"].insert(row)
+    # proposals #49/#51: si el payload traía items pero NINGUNO aportó job_id,
+    # el barrido de abajo borraba el snapshot ENTERO y devolvía 200 "synced".
+    # Un snapshot vacío es indistinguible de "no hay crons" y eso es justo lo
+    # que el heartbeat usa para reconciliar contra la spec.
+    if items and not seen:
+        return jsonify({"error": "ningun item trajo job_id: no se toca el snapshot",
+                        "items_recibidos": len(items)}), 400
+
     # Remove stale
     all_jids = [r[0] for r in db.execute("SELECT job_id FROM active_crons").fetchall()]
     for jid in all_jids:
