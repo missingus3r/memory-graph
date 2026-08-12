@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.21.1"
+VERSION = "2.22.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -820,12 +820,23 @@ def conversation_recent():
     db = get_db()
     limit = safe_int(request.args.get("limit", "50"), default=50, max_val=100000)
     channel = request.args.get("channel", "")
+    # proposal #31: `hours` se ignoraba en silencio y varios crons lo usaban,
+    # con lo cual su ventana temporal era ficticia (siempre las últimas N filas).
+    hours = safe_int(request.args.get("hours", "0"), default=0, min_val=0, max_val=8760)
 
     sql = "SELECT id, timestamp, role, content, channel, session_id FROM conversations"
     params = []
+    where = []
+    if hours:
+        cutoff = (datetime.datetime.now(datetime.timezone.utc)
+                  - datetime.timedelta(hours=hours)).isoformat()
+        where.append("timestamp >= ?")
+        params.append(cutoff)
     if channel:
-        sql += " WHERE channel = ?"
+        where.append("channel = ?")
         params.append(channel)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY timestamp DESC LIMIT ?"
     params.append(limit)
 
@@ -1520,7 +1531,10 @@ _LOOP_HEALTH_TABLES = {
     # recién creada no cuenta como escritura y el loop figura stale (bug #25)
     "proposals": ("COALESCE(updated_at, created_at)", 14),
     "skills": ("created_at", 14),
-    "experiments": ("started_at", 30),
+    # started_at es la fecha de creación y nunca cambia: las observaciones
+    # actualizan updated_at de la misma fila (observations es columna JSON).
+    # Sin COALESCE el loop figura stale para siempre (proposal #29, mismo caso que proposals).
+    "experiments": ("COALESCE(updated_at, started_at)", 30),
     "preferences": ("created_at", 14),
     "entities": ("updated_at", 14),
     "capabilities": ("updated_at", 7),
@@ -1752,6 +1766,12 @@ def key_value(key):
 def reflection_create():
     db = get_db()
     data = request.json or {}
+    # proposal #27: 107 de 183 reflexiones quedaron vacías porque el cron posteaba
+    # con la clave `content` y el endpoint insertaba igual devolviendo ok.
+    if not any((data.get(k) or "").strip() for k in ("analysis", "insights", "actions")):
+        return jsonify({"status": "error",
+                        "error": "reflexion vacia: se requiere al menos uno de analysis/insights/actions",
+                        "received_keys": sorted(data.keys())}), 400
     ts = now_iso()
     db["reflections"].insert({
         "date": data.get("date", ts[:10]),
@@ -2280,6 +2300,19 @@ def proposal_rollback(proposal_id):
 
 # -- World Model --
 
+def _normalize_expires(v):
+    """proposal #54: '+30d' se guardaba crudo y '+' < '2' en ASCII, así que la fila
+    quedaba excluida de /worldmodel/active para siempre. Normaliza +Nd/+Nh/+Nm a ISO."""
+    if not v:
+        return ""
+    m = re.fullmatch(r"\+(\d+)([dhm])", str(v).strip())
+    if not m:
+        return v
+    unit = {"d": "days", "h": "hours", "m": "minutes"}[m.group(2)]
+    return (datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(**{unit: int(m.group(1))})).isoformat()
+
+
 @app.route("/worldmodel", methods=["POST"])
 def worldmodel_create():
     """SOFT OBSERVATION INBOX — loose pattern that hasn't earned structure yet.
@@ -2311,13 +2344,18 @@ def worldmodel_create():
             days_since = (datetime.datetime.now(datetime.timezone.utc) - last_seen_dt).days
         except Exception:
             days_since = 30
-        if days_since < 7:
+        # proposal #42: un cron que se repite no es evidencia independiente.
+        # Con source=heartbeat/cron la fila cuenta occurrences pero no gana peso.
+        if (data.get("source") or "manual").lower() in ("heartbeat", "cron"):
+            new_conf = existing[2]
+        elif days_since < 7:
             new_conf = min(0.99, existing[2] + 0.03)
         else:
             new_conf = min(0.99, existing[2] + 0.01)
         db.execute(
             "UPDATE world_model SET occurrences = ?, confidence = ?, last_seen = ?, updated_at = ?, evidence = COALESCE(?, evidence), expires_at = COALESCE(?, expires_at) WHERE id = ?",
-            [new_occ, new_conf, ts, ts, data.get("evidence"), data.get("expires_at"), existing[0]]
+            [new_occ, new_conf, ts, ts, data.get("evidence"),
+             _normalize_expires(data.get("expires_at")) or None, existing[0]]
         )
         return jsonify({"status": "updated", "id": existing[0], "occurrences": new_occ, "confidence": new_conf})
 
@@ -2329,7 +2367,7 @@ def worldmodel_create():
         "occurrences": 1,
         "first_seen": ts,
         "last_seen": ts,
-        "expires_at": data.get("expires_at", ""),
+        "expires_at": _normalize_expires(data.get("expires_at", "")),
         "created_at": ts,
         "updated_at": ts,
     }, pk="id")
@@ -3765,7 +3803,12 @@ def wm_prediction_resolve(pred_id):
         return jsonify({"error": f"Prediction {pred_id} not found"}), 404
     data = request.json or {}
     actual = data.get("actual_outcome", "")
-    correct = bool(data.get("correct", False))
+    # proposal #34/#50: sin la clave `correct` el default False registraba como
+    # fallida una predicción cumplida y corrompía la calibración en silencio.
+    if "correct" not in data:
+        return jsonify({"error": "correct (bool) requerido — un resolve sin este campo corrompe la calibracion",
+                        "received_keys": sorted(data.keys())}), 400
+    correct = bool(data.get("correct"))
     conf = row[1] or 0.5
     calibration = (conf - (1.0 if correct else 0.0))  # Brier-like signed error
     ts = now_iso()
@@ -4331,7 +4374,11 @@ def harness_daily_metrics():
 
     row = db.execute(
         "SELECT COUNT(*), SUM(CASE WHEN passed IN (0,'0','false','False') THEN 1 ELSE 0 END) "
-        "FROM verifications WHERE created_at > datetime('now','-1 day')").fetchone()
+        "FROM verifications WHERE created_at > datetime('now','-1 day') "
+        # proposal #52: sólo los check_type que miden veracidad de mis claims.
+        # `evidence`/`goal_alignment` registran fallos ajenos (ej. un deploy caído)
+        # y contarlos desincentivaba registrarlos.
+        "AND check_type IN ('hallucination','factual')").fetchone()
     total_ver, failed_ver = row[0] or 0, row[1] or 0
     out["verifications_24h"] = total_ver
     out["hallucination_rate"] = round(failed_ver / total_ver, 4) if total_ver else None
@@ -4427,8 +4474,14 @@ def cron_active_upsert():
     data = request.json or {}
     items = data.get("crons") or []
     ts = now_iso()
+    if not isinstance(items, list):
+        return jsonify({"error": "crons debe ser una lista de objetos {job_id,label,cron_expr}"}), 400
     seen = set()
     for c in items:
+        # proposal #59/#51: sin este guard un array de strings tira AttributeError
+        # (500 opaco) o borra el snapshot entero devolviendo 200.
+        if not isinstance(c, dict):
+            return jsonify({"error": "crons[] debe contener objetos {job_id,label,cron_expr}"}), 400
         jid = (c.get("job_id") or "").strip()
         if not jid:
             continue
