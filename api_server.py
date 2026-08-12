@@ -1530,7 +1530,11 @@ _LOOP_HEALTH_TABLES = {
     # updated_at solo se setea al aprobar/rechazar: sin COALESCE, una proposal
     # recién creada no cuenta como escritura y el loop figura stale (bug #25)
     "proposals": ("COALESCE(updated_at, created_at)", 14),
-    "skills": ("created_at", 14),
+    # mismo caso que experiments (#29): created_at es el alta de la skill, no su
+    # uso. Una skill ejecutada ayer no contaba como actividad del loop y la tabla
+    # figuraba stale por no haber dado de alta ninguna nueva. `record` actualiza
+    # last_used, así que ESE es el indicador de que el loop de skills está vivo.
+    "skills": ("COALESCE(last_used, created_at)", 14),
     # started_at es la fecha de creación y nunca cambia: las observaciones
     # actualizan updated_at de la misma fila (observations es columna JSON).
     # Sin COALESCE el loop figura stale para siempre (proposal #29, mismo caso que proposals).
