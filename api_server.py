@@ -4404,7 +4404,14 @@ def harness_daily_metrics():
         "OR content LIKE '%como que%' OR content LIKE '%cómo que%' "
         "OR content LIKE '%eso no%' OR content LIKE '%en realidad%' "
         "OR content LIKE '%no era eso%' OR content LIKE '%revisá%' "
-        "OR content LIKE '%fijate%' OR content LIKE '%corregí%')").fetchone()
+        "OR content LIKE '%fijate%' OR content LIKE '%corregí%' "
+        # Bruno escribe sin tildes en Telegram: los patrones acentuados de arriba
+        # no matchean nada. Verificado el 12/08 contra la fila 7872 ("corregi eso
+        # de que ninguna skill llega al umbral"), una corrección directa que la
+        # métrica contó como 0 el mismo día que se amplió.
+        "OR content LIKE '%corregi %' OR content LIKE '%revisa %' "
+        "OR content LIKE '%esta mal%' OR content LIKE '%no es asi%' "
+        "OR content LIKE '%como que%')").fetchone()
     out["corrections_count"] = corr[0] or 0
 
     out["goals_completed_today"] = db.execute(
