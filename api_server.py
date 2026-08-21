@@ -114,7 +114,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.22.0"
+VERSION = "2.22.1"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -1021,7 +1021,12 @@ def memory_search():
     sql += " LIMIT ?"
     params.append(limit)
 
-    rows = db.execute(sql, params).fetchall()
+    try:
+        rows = db.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        # FTS5 lee -, *, : y comillas como operadores. Reintentar como frase literal.
+        params[0] = '"' + query.replace('"', '""') + '"'
+        rows = db.execute(sql, params).fetchall()
     results = [{"id": r[0], "type": r[1], "name": r[2], "description": r[3],
                 "content": r[4], "tags": r[5], "created_at": r[6], "updated_at": r[7]}
                for r in rows]
