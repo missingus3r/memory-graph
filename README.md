@@ -123,4 +123,4 @@ Or use the **💾 Backup** button in the dashboard topbar — info / export / im
 
 ---
 
-Built by [Bruno Silveira](https://github.com/missingus3r) with [Friday](https://github.com/missingus3r/friday-showcase).
+Built by [missingus3r](https://github.com/missingus3r) with [Friday](https://github.com/missingus3r/friday-showcase).
