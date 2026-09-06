@@ -3829,7 +3829,7 @@ setTimeout(() => {
       setStatus('fetching token…', '#fbbf24');
       const ctxResp = await fetch(API + '/realtime/context');
       const ctx = await ctxResp.json();
-      const sysPrompt = ctx.system_prompt || 'Sos Friday, asistente de Bruno.';
+      const sysPrompt = ctx.system_prompt || 'Sos Friday, asistente de missingus3r.';
 
       const sessResp = await fetch(API + '/realtime/session', {
         method: 'POST',
@@ -3888,7 +3888,7 @@ setTimeout(() => {
           {type: 'function', name: 'memory_store',  description: 'Guarda algo en la memoria persistente de Friday. type ∈ {user,feedback,project,reference}.', parameters: {type:'object', properties:{name:{type:'string'}, type:{type:'string', enum:['user','feedback','project','reference']}, content:{type:'string'}, description:{type:'string'}}, required:['name','content']}},
           {type: 'function', name: 'system_info',   description: 'Devuelve fecha actual, espacio libre en disco interno + externo, uptime.',                  parameters: {type:'object', properties:{}, required:[]}},
           {type: 'function', name: 'cron_list',     description: 'Lista los crons activos del sistema (nombre, schedule, última vez visto).',                  parameters: {type:'object', properties:{}, required:[]}},
-          {type: 'function', name: 'note_add',      description: 'Agrega una nota a notas.md de Bruno con timestamp. Para apuntes rápidos.',                   parameters: {type:'object', properties:{text:{type:'string'}}, required:['text']}},
+          {type: 'function', name: 'note_add',      description: 'Agrega una nota a notas.md de missingus3r con timestamp. Para apuntes rápidos.',                   parameters: {type:'object', properties:{text:{type:'string'}}, required:['text']}},
         ];
         // Inject Friday context + tools as session instructions
         rtDc.send(JSON.stringify({
