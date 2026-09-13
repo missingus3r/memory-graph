@@ -60,6 +60,7 @@ Endpoints:
   POST /wm/prediction
   GET  /wm/prediction/list
   PATCH /wm/prediction/<id>/resolve
+  DELETE /wm/prediction/<id>   (solo si NO esta resuelta)
   POST /verify
   GET  /verify/list?subject_type=&subject_id=
   POST /sandbox/execute    (dry-run | simulation | live)
@@ -114,7 +115,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.23.0"
+VERSION = "2.24.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -3873,6 +3874,27 @@ def wm_prediction_list():
                 "calibration": r[10], "created_at": r[11],
                 "confidence_raw": r[12], "confidence_adjusted": r[13]} for r in rows]
     return jsonify({"count": len(results), "predictions": results})
+
+
+@app.route("/wm/prediction/<int:pred_id>", methods=["DELETE"])
+def wm_prediction_delete(pred_id):
+    """Borra una prediccion NO resuelta. Existe porque wm_predictions solo exponia
+    POST/GET/PATCH-resolve, asi que una fila creada por error (un probe, un typo)
+    no tenia salida por la API: o se resolvia —metiendo una muestra basura en la
+    calibracion— o se borraba a mano de la base. Proposal #80, aprobada por Bruno."""
+    db = get_db()
+    row = db.execute("SELECT resolved FROM wm_predictions WHERE id = ?", [pred_id]).fetchone()
+    if not row:
+        return jsonify({"error": f"Prediction {pred_id} not found"}), 404
+    # Una prediccion resuelta es evidencia de calibracion: no se borra nunca.
+    if row[0]:
+        return jsonify({"error": "prediccion resuelta: no se borra, es muestra de calibracion",
+                        "id": pred_id}), 409
+    # get_db() devuelve un sqlite_utils.Database sobre una conexion con
+    # isolation_level=None (autocommit): NO tiene .commit() y no hace falta.
+    # Llamarlo tiraba 500 despues de haber borrado la fila igual.
+    db.execute("DELETE FROM wm_predictions WHERE id = ?", [pred_id])
+    return jsonify({"status": "deleted", "id": pred_id})
 
 
 @app.route("/wm/prediction/<int:pred_id>/resolve", methods=["PATCH"])
