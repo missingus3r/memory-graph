@@ -115,7 +115,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.24.0"
+VERSION = "2.25.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -955,9 +955,16 @@ def conversation_summarize():
 
     for week_key, entries in by_week.items():
         # Check if summary already exists for this week
+        # OJO: el LIKE de antes buscaba '"week":"..."' SIN espacio, y json.dumps
+        # escribe '"week": "..."' CON espacio (su separador por defecto), asi que
+        # nunca matcheaba: cada corrida de §7 re-resumia todas las semanas desde
+        # cero. Al 13/09 habia 288 filas role=summary para 25 semanas distintas
+        # (263 duplicados) y el numero subia cada domingo. json_extract no depende
+        # de como quedo formateado el JSON.
         existing = db.execute(
-            "SELECT id FROM conversations WHERE role = 'summary' AND metadata LIKE ?",
-            [f'%"week":"{week_key}"%']
+            "SELECT id FROM conversations WHERE role = 'summary' "
+            "AND json_extract(metadata, '$.week') = ?",
+            [week_key]
         ).fetchone()
         if existing:
             continue
@@ -1622,6 +1629,15 @@ _LOOP_HEALTH_TABLES = {
     "preferences": ("created_at", 14),
     "entities": ("updated_at", 14),
     "capabilities": ("updated_at", 7),
+    # Las wm_* estaban fuera del dict, asi que /harness/health cantaba
+    # stale_count 0 mientras wm_entities no recibia una escritura desde el
+    # 2026-05-07 (129 dias al 13/09) y wm_relations desde el 04/09. El
+    # heartbeat §3 lee ese 0 cada hora y lo reporta como "todo sano".
+    # Umbrales altos a proposito: son tablas de graduacion, no de escritura
+    # diaria — lo que interesa detectar es que el loop se murio, no un dia flojo.
+    "wm_entities": ("COALESCE(updated_at, created_at)", 30),
+    "wm_relations": ("COALESCE(updated_at, created_at)", 21),
+    "wm_events": ("created_at", 21),
 }
 
 
