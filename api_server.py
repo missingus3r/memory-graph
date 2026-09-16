@@ -115,7 +115,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.25.0"
+VERSION = "2.26.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -2004,6 +2004,33 @@ def skill_delete(id):
     return jsonify({"status": "deleted", "id": id})
 
 
+@app.route("/skill/<int:skill_id>", methods=["PATCH"])
+def skill_update(skill_id):
+    """Edita una skill sin perder su historial de uso.
+
+    Sin esto, corregir los pasos de una skill obliga a borrarla y recrearla, y eso
+    tira a la basura `times_used` y `maturity`, que son justamente el ratchet que
+    decide si se promueve. Paso el 14/09 con la skill 18 (36 usos) y el 16/09 con
+    la 33 (22 usos): las dos hubo que arreglarlas con un UPDATE directo al sqlite.
+    """
+    db = get_db()
+    existing = db.execute("SELECT id FROM skills WHERE id = ?", [skill_id]).fetchone()
+    if not existing:
+        return jsonify({"error": f"Skill {skill_id} not found"}), 404
+    data = request.json or {}
+    campos = {k: v for k, v in data.items()
+              if k in ("name", "trigger_pattern", "description", "steps")}
+    if not campos:
+        return jsonify({"error": "nada para actualizar",
+                        "editables": ["name", "trigger_pattern", "description", "steps"]}), 400
+    # `steps` convive en la tabla como JSON (skill 18) y como texto plano (skill 33).
+    # Una lista o dict se serializa; un string se guarda tal cual, sin reformatear.
+    if isinstance(campos.get("steps"), (list, dict)):
+        campos["steps"] = json.dumps(campos["steps"], ensure_ascii=False)
+    db["skills"].update(skill_id, campos)
+    return jsonify({"status": "updated", "id": skill_id, "campos": sorted(campos)})
+
+
 @app.route("/skill/<int:skill_id>/use", methods=["PUT"])
 def skill_use(skill_id):
     db = get_db()
@@ -2227,15 +2254,19 @@ def proposal_list():
     status = request.args.get("status")
     if status:
         rows = db.execute(
-            "SELECT id, file_path, change_type, description, diff_preview, status, created_at, resolved_at FROM proposals WHERE status = ? ORDER BY created_at DESC",
+            "SELECT id, file_path, change_type, description, diff_preview, status, created_at, resolved_at, apply_status, applied_at, apply_error FROM proposals WHERE status = ? ORDER BY created_at DESC",
             [status]
         ).fetchall()
     else:
         rows = db.execute(
-            "SELECT id, file_path, change_type, description, diff_preview, status, created_at, resolved_at FROM proposals ORDER BY created_at DESC"
+            "SELECT id, file_path, change_type, description, diff_preview, status, created_at, resolved_at, apply_status, applied_at, apply_error FROM proposals ORDER BY created_at DESC"
         ).fetchall()
+    # apply_status se omitia del SELECT aunque la columna existe desde siempre: desde
+    # el listado era imposible ver cuales proposals se escribieron de verdad, y un
+    # status:"approved" con apply_failed se leia como aplicada (caso del 14/09).
     results = [{"id": r[0], "file_path": r[1], "change_type": r[2], "description": r[3],
-                "diff_preview": r[4], "status": r[5], "created_at": r[6], "resolved_at": r[7]} for r in rows]
+                "diff_preview": r[4], "status": r[5], "created_at": r[6], "resolved_at": r[7],
+                "apply_status": r[8], "applied_at": r[9], "apply_error": r[10]} for r in rows]
     return jsonify({"count": len(results), "results": results})
 
 
