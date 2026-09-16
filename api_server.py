@@ -115,7 +115,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.26.0"
+VERSION = "2.27.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -4574,6 +4574,20 @@ def harness_daily_metrics():
         "AND calibration IS NOT NULL").fetchone()
     out["calibration_gap_7d"] = round(row[0], 4) if row[0] is not None else None
     out["predictions_resolved_7d"] = row[1] or 0
+    # El gap es error ABSOLUTO: mide dispersion y no dice la direccion. Dos clases
+    # con sesgos opuestos se cancelan y el gap queda alto sin que nada parezca mal.
+    # Medido el 14/09 con este mismo filtro (resolved_at estricto, n=39, reproduce
+    # el gap 0.3899 exacto): sesgo GLOBAL +0.0057, o sea "sin sesgo". Pero por clase,
+    # las predicciones sobre acciones de Bruno (n=24, 38% de acierto) dan +0.1455
+    # — SOBRE-confianza — y el resto (n=15, 87% de acierto) da -0.2179, SUB-confianza.
+    # El offset global de /wm/prediction esta ajustado sobre esa mezcla, asi que a
+    # una clase la corrige y a la otra la empeora. Sin el signo eso es invisible.
+    srow = db.execute(
+        "SELECT AVG(confidence - CASE WHEN calibration < 0 THEN 1.0 ELSE 0.0 END) "
+        "FROM wm_predictions WHERE resolved=1 "
+        "AND resolved_at > datetime('now','-7 days') "
+        "AND calibration IS NOT NULL AND confidence IS NOT NULL").fetchone()
+    out["calibration_bias_7d"] = round(srow[0], 4) if srow[0] is not None else None
     out["predictions_open"] = db.execute(
         "SELECT COUNT(*) FROM wm_predictions WHERE resolved=0 OR resolved IS NULL").fetchone()[0]
 
