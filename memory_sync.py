@@ -61,6 +61,19 @@ def safe_filename(name):
     return re.sub(r"[^A-Za-z0-9._-]", "_", name)[:120] or "unnamed"
 
 
+def canon_name(name):
+    """Nombre canonico para detectar la MISMA memoria escrita distinto.
+
+    El match por igualdad exacta trataba como nuevas 14 de 30 memorias que ya
+    estaban en la base, y las habria duplicado: 10 difieren solo en guion vs
+    underscore (feedback-self-referential-grep / feedback_self_referential_grep)
+    y 4 mas solo en el prefijo de tipo (project_vm_hyperv_migration /
+    vm_hyperv_migration). Medido con --dry-run el 2026-09-18.
+    """
+    s = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+    return re.sub(r"^(feedback|project|reference|user)_", "", s)
+
+
 def main():
     dry = "--dry-run" in sys.argv
     report = {"imported_to_db": [], "mirrored": 0, "conflicts": [], "errors": []}
@@ -70,6 +83,9 @@ def main():
     db_rows = con.execute(
         "SELECT id, name, type, description, content, updated_at FROM memories").fetchall()
     db_by_name = {r["name"]: r for r in db_rows}
+    db_by_canon = {}
+    for r in db_rows:
+        db_by_canon.setdefault(canon_name(r["name"]), r)
     db_contents = {re.sub(r"\s+", " ", (r["content"] or "").strip()) for r in db_rows}
 
     # files -> DB
@@ -88,6 +104,16 @@ def main():
             report.setdefault("skipped_same_content", []).append(mem["name"])
             continue
         if existing is None:
+            # Antes de crear una fila: si el nombre canonico ya existe, es la
+            # misma memoria con otra grafia. Importarla duplicaria el hecho, y
+            # fusionarla sola podria pisar contenido divergido -> se reporta y
+            # no se toca nada. Requiere decision humana.
+            twin = db_by_canon.get(canon_name(mem["name"]))
+            if twin is not None:
+                report.setdefault("needs_review", []).append(
+                    {"md_name": mem["name"], "db_name": twin["name"],
+                     "db_id": twin["id"], "reason": "mismo nombre canonico"})
+                continue
             if not dry:
                 try:
                     api_post("/memory", mem)
