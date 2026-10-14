@@ -115,7 +115,7 @@ import secrets as _secrets
 import sqlite_utils
 
 # ── Config ──
-VERSION = "2.27.0"
+VERSION = "2.28.0"
 DB_PATH = os.environ.get("FRIDAY_DB_PATH", str(Path.home() / ".friday" / "memory.db"))
 PORT = int(os.environ.get("FRIDAY_MEMORY_PORT", "7777"))
 
@@ -211,6 +211,9 @@ def init_db():
         # v2.13: calibration loop — store both raw user-supplied and offset-adjusted confidence
         "ALTER TABLE wm_predictions ADD COLUMN confidence_raw REAL",
         "ALTER TABLE wm_predictions ADD COLUMN confidence_adjusted REAL",
+        # v2.28: calibracion por tipo de prediccion + fuente con la que se va a resolver
+        "ALTER TABLE wm_predictions ADD COLUMN category TEXT DEFAULT ''",
+        "ALTER TABLE wm_predictions ADD COLUMN resolution_source TEXT DEFAULT ''",
         # v2.13: proposal apply loop — track apply outcome + rollback metadata
         "ALTER TABLE proposals ADD COLUMN apply_status TEXT DEFAULT ''",
         "ALTER TABLE proposals ADD COLUMN applied_at TEXT",
@@ -3816,20 +3819,53 @@ def wm_event_list():
     return jsonify({"count": len(results), "events": results})
 
 
-def _compute_calibration_offset(db, days=30, min_samples=5):
+PREDICTION_CATEGORIES = ("bruno", "descargas", "lanzamientos", "sistema", "otros")
+
+
+def _prediction_category(text):
+    """v2.28: tipo de prediccion por palabras clave cuando no viene `category`.
+    Medido el 14/09 (insight 366): las predicciones sobre acciones de Bruno salen
+    sobre-confiadas y el resto sub-confiado; mezcladas, el sesgo global se cancela."""
+    t = (text or "").lower()
+    if any(k in t for k in ("bruno", "responde", "pide ", "aprueba", "contesta", "reserva")):
+        return "bruno"
+    if any(k in t for k in ("yts", "torrent", "seeds", "descarga", "estreno", "capitulo", "capítulo")):
+        return "descargas"
+    if any(k in t for k in ("lanza", "publica", "pesos", "release", "modelo", "icann")):
+        return "lanzamientos"
+    if any(k in t for k in ("ledger", "cron", "disco", "recolector", "plugin", "harness",
+                            "push", "script", "servicio", "watch")):
+        return "sistema"
+    return "otros"
+
+
+def _compute_calibration_offset(db, days=30, min_samples=5, category=None):
     """Closed-loop calibration. Returns mean signed Brier-like error over recent
     resolved predictions. Positive = overconfident (lower future conf).
-    Negative = underconfident (raise future conf)."""
+    Negative = underconfident (raise future conf).
+    v2.28: con `category`, usa solo las de ese tipo si hay min_samples; si no,
+    cae al offset global (y lo dice en `scope`)."""
     cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).isoformat()
+    if category:
+        # Las anteriores a la 2.28 no tienen category guardada: se clasifican al vuelo.
+        rows = [r[0] for r in db.execute(
+            "SELECT calibration, COALESCE(category,''), hypothesis, predicted_outcome FROM wm_predictions "
+            "WHERE resolved=1 AND calibration IS NOT NULL AND resolved_at >= ?",
+            [cutoff]).fetchall()
+            if (r[1] if r[1] in PREDICTION_CATEGORIES
+                else _prediction_category((r[2] or "") + " " + (r[3] or ""))) == category]
+        if len(rows) >= min_samples:
+            return {"offset": sum(rows) / len(rows), "samples": len(rows),
+                    "sufficient": True, "window_days": days, "scope": category}
     rows = db.execute(
         "SELECT calibration FROM wm_predictions "
         "WHERE resolved=1 AND calibration IS NOT NULL AND resolved_at >= ?",
         [cutoff]).fetchall()
     n = len(rows)
     if n < min_samples:
-        return {"offset": 0.0, "samples": n, "sufficient": False, "window_days": days}
+        return {"offset": 0.0, "samples": n, "sufficient": False, "window_days": days, "scope": "global"}
     avg = sum(r[0] for r in rows) / n
-    return {"offset": avg, "samples": n, "sufficient": True, "window_days": days}
+    return {"offset": avg, "samples": n, "sufficient": True, "window_days": days, "scope": "global"}
 
 
 @app.route("/calibration/current", methods=["GET"])
@@ -3870,7 +3906,11 @@ def wm_prediction_create():
             "duplicate_of": dup[0]
         }), 409
     raw = clamp_float(data.get("confidence", 0.5), default=0.5)
-    cal = _compute_calibration_offset(db)
+    category = (data.get("category") or "").strip().lower()
+    if category not in PREDICTION_CATEGORIES:
+        category = _prediction_category(hypothesis + " " + outcome)
+    resolution_source = (data.get("resolution_source") or "").strip()
+    cal = _compute_calibration_offset(db, category=category)
     adjusted = max(0.05, min(0.95, raw - cal["offset"])) if cal["sufficient"] else raw
     ts = now_iso()
     db["wm_predictions"].insert({
@@ -3886,16 +3926,25 @@ def wm_prediction_create():
         "actual_outcome": "",
         "resolved_at": "",
         "calibration": None,
+        "category": category,
+        "resolution_source": resolution_source,
         "created_at": ts,
         "updated_at": ts,
     })
-    return jsonify({
+    resp = {
         "status": "created",
+        "category": category,
         "confidence_raw": raw,
         "confidence_adjusted": adjusted,
         "calibration_offset_applied": cal["offset"] if cal["sufficient"] else 0.0,
         "calibration_samples": cal["samples"],
-    })
+        "calibration_scope": cal["scope"],
+    }
+    if not resolution_source:
+        # v2.28 (pedido de Bruno, 14/10): una prediccion que no se puede comprobar
+        # con una fuente legible no sirve para calibrar (caso .gram, 351).
+        resp["warning"] = "sin resolution_source: indicá con qué fuente legible se va a resolver"
+    return jsonify(resp)
 
 
 @app.route("/wm/prediction/list", methods=["GET"])
@@ -4521,7 +4570,13 @@ def harness_daily_metrics():
       INFERIOR: no detecta correcciones que dependen del turno anterior
       (imperativo correctivo sin negación). Ver proposals #32/#48.
     - goals_completed_today, goals_active.
-    - calibration_gap_7d: avg |confidence - outcome| de predictions resueltas 7d.
+    - calibration_gap_7d: v2.28, error de calibracion esperado (ECE) de las
+      resueltas en 14 dias: |confianza media - tasa de acierto| por franja de
+      confianza, ponderado. null con menos de 8. Hasta la 2.27 era el promedio de
+      |confianza - resultado|, que mide dispersion y da ~0,5 con predicciones de
+      confianza media aunque no haya sesgo (eso es ahora abs_error_7d).
+    - calibration_by_category: 30 dias, por tipo (n, acierto, confianza, sesgo);
+      calibration_alert lista los tipos con n>=5 y |sesgo|>0,25.
     Registra cada métrica no-null en /metric y devuelve el resumen."""
     db = get_db()
     out = {}
@@ -4572,8 +4627,45 @@ def harness_daily_metrics():
         "SELECT AVG(ABS(calibration)), COUNT(*) FROM wm_predictions "
         "WHERE resolved=1 AND resolved_at > datetime('now','-7 days') "
         "AND calibration IS NOT NULL").fetchone()
-    out["calibration_gap_7d"] = round(row[0], 4) if row[0] is not None else None
+    out["abs_error_7d"] = round(row[0], 4) if row[0] is not None else None
     out["predictions_resolved_7d"] = row[1] or 0
+
+    # v2.28: ECE por franjas de confianza (14 dias). outcome=1 si calibration<0
+    # (calibration = confianza - resultado y la confianza ajustada nunca llega a 1).
+    rows = db.execute(
+        "SELECT confidence, CASE WHEN calibration < 0 THEN 1.0 ELSE 0.0 END, "
+        "COALESCE(NULLIF(category,''), '') , hypothesis, predicted_outcome FROM wm_predictions "
+        "WHERE resolved=1 AND resolved_at > datetime('now','-14 days') "
+        "AND calibration IS NOT NULL AND confidence IS NOT NULL").fetchall()
+    bins = {}
+    for conf, hit, _cat, _h, _o in rows:
+        b = min(int(conf * 5), 4)
+        bins.setdefault(b, []).append((conf, hit))
+    n14 = len(rows)
+    out["calibration_samples_14d"] = n14
+    if n14 >= 8:
+        ece = sum(len(v) / n14 * abs(sum(c for c, _ in v) / len(v) - sum(h for _, h in v) / len(v))
+                  for v in bins.values())
+        out["calibration_gap_7d"] = round(ece, 4)
+    else:
+        out["calibration_gap_7d"] = None
+
+    rows30 = db.execute(
+        "SELECT confidence, CASE WHEN calibration < 0 THEN 1.0 ELSE 0.0 END, "
+        "COALESCE(category,''), hypothesis, predicted_outcome FROM wm_predictions "
+        "WHERE resolved=1 AND resolved_at > datetime('now','-30 days') "
+        "AND calibration IS NOT NULL AND confidence IS NOT NULL").fetchall()
+    bycat = {}
+    for conf, hit, cat, hyp, outc in rows30:
+        cat = cat if cat in PREDICTION_CATEGORIES else _prediction_category((hyp or "") + " " + (outc or ""))
+        bycat.setdefault(cat, []).append((conf, hit))
+    out["calibration_by_category"] = {
+        k: {"n": len(v), "hit_rate": round(sum(h for _, h in v) / len(v), 3),
+            "avg_conf": round(sum(c for c, _ in v) / len(v), 3),
+            "bias": round(sum(c - h for c, h in v) / len(v), 3)}
+        for k, v in sorted(bycat.items())}
+    out["calibration_alert"] = [k for k, v in out["calibration_by_category"].items()
+                                if v["n"] >= 5 and abs(v["bias"]) > 0.25]
     # El gap es error ABSOLUTO: mide dispersion y no dice la direccion. Dos clases
     # con sesgos opuestos se cancelan y el gap queda alto sin que nada parezca mal.
     # Medido el 14/09 con este mismo filtro (resolved_at estricto, n=39, reproduce
@@ -4594,7 +4686,7 @@ def harness_daily_metrics():
     ts = now_iso()
     recorded = []
     for name in ("hallucination_rate", "corrections_count", "goals_completed_today",
-                 "goals_active", "calibration_gap_7d", "predictions_open"):
+                 "goals_active", "calibration_gap_7d", "abs_error_7d", "predictions_open"):
         if out.get(name) is not None:
             db["metrics"].insert({"name": name, "value": float(out[name]), "unit": "",
                                   "context": "harness/daily_metrics", "tags": "[]",
